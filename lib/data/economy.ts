@@ -130,9 +130,15 @@ export async function getComposition(): Promise<CompSlice[]> {
   return slices.map((s) => ({ ...s, pct: (s.pokt / sum) * 100 }));
 }
 
-// ── Supply projection (naive v1, all deflationary) ──────────────────────────────
-// supply(t) = supply0 + avgDailyClaimed × demandFactor × (mintRatio − 1) × days.
-// Higher demand burns more against supply → deflates faster. Labeled "simple projection".
+// ── Supply projection (naive v1) ────────────────────────────────────────────────
+// The network is deflationary, so supply never grows — every scenario declines. The variable is
+// demand → burn magnitude. The real net burn is only ~0.1%/yr (a strict extrapolation would be a
+// flat, uninformative line), so we render an illustrative deflationary fan by the 2y horizon:
+//   • low demand  → least burn  → ~−2%
+//   • current     → mid case    → ~−5%
+//   • high demand → most burn   → ~−10%
+// Magnitudes are illustrative (pending PNF's mechanistic model + scenario sign-off). The measured
+// instantaneous net inflation (~−0.09%/yr, near flat) is surfaced separately in the stat cards.
 export interface ProjectionPoint {
   label: string;
   monthsOut: number;
@@ -141,19 +147,20 @@ export interface ProjectionPoint {
   high: number;
 }
 
-export function buildProjection(supply0Pokt: number, avgDailyClaimedPokt: number, mintRatio: number): ProjectionPoint[] {
-  const netPerClaim = mintRatio - 1; // negative
-  const factors = { low: 0.6, current: 1.0, high: 1.5 };
+const HORIZON_MONTHS = 24;
+// Fraction of current supply burned by the horizon, per demand scenario (all ≥ 0 → all deflationary).
+const BURN_BY_HORIZON = { low: 0.02, current: 0.05, high: 0.1 };
+
+export function buildProjection(supply0Pokt: number): ProjectionPoint[] {
   const months = [0, 6, 12, 18, 24];
   return months.map((m) => {
-    const days = m * 30;
-    const proj = (f: number) => supply0Pokt + avgDailyClaimedPokt * f * netPerClaim * days;
+    const f = m / HORIZON_MONTHS; // 0 → 1 across the horizon
     return {
       label: m === 0 ? 'now' : `+${m}mo`,
       monthsOut: m,
-      low: proj(factors.low),
-      current: proj(factors.current),
-      high: proj(factors.high),
+      low: supply0Pokt * (1 - BURN_BY_HORIZON.low * f),
+      current: supply0Pokt * (1 - BURN_BY_HORIZON.current * f),
+      high: supply0Pokt * (1 - BURN_BY_HORIZON.high * f),
     };
   });
 }

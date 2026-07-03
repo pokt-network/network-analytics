@@ -56,7 +56,6 @@ async function buildEconomy(): Promise<EconomyResponse> {
 
   const burn7dPokt = burnMint7d.reduce((s, p) => s + p.burnPokt, 0);
   const mint7dPokt = burnMint7d.reduce((s, p) => s + p.mintPokt, 0);
-  const avgDailyClaimedPokt = burnMint7d.length ? burn7dPokt / burnMint7d.length : 0;
   const supply0 = supplyHistory.at(-1)?.totalSupplyPokt ?? 0;
 
   // Pins within the visible (1yr) window, matched to the nearest supply bucket for chart placement.
@@ -77,7 +76,7 @@ async function buildEconomy(): Promise<EconomyResponse> {
     pins: visible,
     composition,
     burnMint: burnMint7d,
-    projection: buildProjection(supply0, avgDailyClaimedPokt, mintRatio),
+    projection: buildProjection(supply0),
   };
 }
 

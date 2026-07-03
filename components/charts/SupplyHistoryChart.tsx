@@ -52,7 +52,7 @@ export function SupplyHistoryChart({ data, pins, height = 320 }: Props) {
             minTickGap={40}
           />
           <YAxis
-            domain={[0, 'dataMax']}
+            domain={[1_000_000_000, 'dataMax']}
             tickFormatter={(v) => fmtNum(Number(v))}
             tick={{ fill: AXIS, fontSize: 11 }}
             stroke={GRID}

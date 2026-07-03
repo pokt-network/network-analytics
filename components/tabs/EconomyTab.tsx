@@ -138,8 +138,9 @@ export function EconomyTab() {
           />
           <ProjectionChart data={data.projection} height={240} />
           <p className="mt-2 text-[12px] italic text-text-tertiary">
-            All paths deflate; higher relay demand burns more against supply, so it deflates faster.
-            Naive extrapolation — mechanistic model + scenario definitions pending PNF sign-off.
+            All scenarios deflate — supply never grows. Low demand burns least (~−2% by +24mo),
+            high demand most (~−10%). Illustrative magnitudes; mechanistic model + scenario
+            definitions pending PNF sign-off.
           </p>
         </Card>
       </div>
