@@ -1,0 +1,35 @@
+{
+  "name": "network-analytics",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "sync-vendor": "node scripts/sync-vendor.mjs",
+    "sync-vendor:check": "node scripts/sync-vendor.mjs --check",
+    "precompute": "node scripts/precompute-economics.mjs"
+  },
+  "dependencies": {
+    "@tabler/icons-react": "^3.34.0",
+    "next": "16.2.7",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "recharts": "^3.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.7",
+    "postcss": "^8.5.10",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5"
+  },
+  "overrides": {
+    "postcss": "^8.5.10"
+  }
+}

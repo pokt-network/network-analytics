@@ -1,0 +1,7 @@
+[
+  {
+    "date": "2026-02-11",
+    "label": "PIP-41 activation",
+    "description": "Mint-equals-burn tokenomics (PIP-41) took effect at block 636,543, making settlement net-deflationary via the mint ratio."
+  }
+]

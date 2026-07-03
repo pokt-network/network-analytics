@@ -1,0 +1,210 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   POCKET NETWORK ANALYTICS — DESIGN TOKENS
+   Brand tokens mirror the explorer verbatim (pnf-explorer/app/globals.css).
+   Tailwind's theme (tailwind.config.ts) maps onto these CSS variables, so the
+   whole UI re-themes by flipping [data-theme] — no `dark:` variants needed.
+   ============================================================ */
+:root,
+[data-theme='dark'] {
+  --bg-primary: #171c1f;
+  --bg-card: #1e2529;
+  --bg-card-hover: #242c31;
+  --bg-surface: #2a3338;
+  --text-primary: #f6f6f6;
+  --text-secondary: #8e9aa3;
+  --text-tertiary: #5a656d;
+  --border: hsla(0, 0%, 96%, 0.08);
+  --border-hover: hsla(0, 0%, 96%, 0.15);
+  --star-opacity: 1;
+  --grid-dot: hsla(0, 0%, 96%, 0.03);
+}
+[data-theme='light'] {
+  --bg-primary: #f6f6f6;
+  --bg-card: #fff;
+  --bg-card-hover: #f0f0f0;
+  --bg-surface: #e8eaed;
+  --text-primary: #171c1f;
+  --text-secondary: #5a656d;
+  --text-tertiary: #8e9aa3;
+  --border: rgba(23, 28, 31, 0.1);
+  --border-hover: rgba(23, 28, 31, 0.2);
+  --star-opacity: 0;
+  --grid-dot: rgba(23, 28, 31, 0.035);
+}
+/* brand constants (theme-independent) */
+:root {
+  --blue: #025af2;
+  --blue-brand: #023ea9;
+  --blue-soft: #4c9bf5;
+  --gold: #ffc547;
+  --mint: #48e5c2;
+  --coral: #ff5a5f;
+  --lavender: #b8b8ff;
+  --radius-card: 12px;
+  --radius-lg: 16px;
+  --maxw: 1280px;
+  --mono: ui-monospace, Menlo, monospace;
+}
+
+@layer base {
+  body {
+    font-family: var(--font-rubik), 'Rubik', ui-sans-serif, system-ui, sans-serif;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    min-height: 100vh;
+    position: relative;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  a {
+    color: inherit;
+  }
+  /* subtle dot grid on the dark canvas only */
+  [data-theme='dark'] body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background-image: radial-gradient(circle, var(--grid-dot) 1px, transparent 0);
+    background-size: 24px 24px;
+  }
+}
+
+/* ---- ambient atmosphere (starfield + glow + orbital rings) — verbatim from explorer ---- */
+.atmosphere {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+  opacity: var(--star-opacity);
+  transition: opacity 0.4s ease;
+}
+.stars {
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(2px 2px at 20px 30px, rgba(255, 255, 255, 0.8), transparent),
+    radial-gradient(2px 2px at 200px 50px, rgba(2, 90, 242, 0.8), transparent),
+    radial-gradient(1px 1px at 350px 130px, rgba(255, 197, 71, 0.7), transparent),
+    radial-gradient(2px 2px at 500px 100px, rgba(72, 229, 194, 0.6), transparent),
+    radial-gradient(1px 1px at 90px 40px, rgba(255, 255, 255, 0.9), transparent),
+    radial-gradient(2px 2px at 130px 80px, rgba(255, 255, 255, 0.5), transparent),
+    radial-gradient(1px 1px at 250px 160px, rgba(255, 255, 255, 0.6), transparent);
+  background-size: 550px 200px;
+  animation: twinkle 8s ease-in-out infinite alternate;
+}
+.glow {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse 80% 50% at 20% 15%, rgba(2, 90, 242, 0.12) 0%, transparent 50%),
+    radial-gradient(ellipse 60% 40% at 85% 80%, rgba(255, 197, 71, 0.07) 0%, transparent 50%);
+}
+.ring {
+  position: fixed;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 0;
+}
+.ring.r1 {
+  width: 900px;
+  height: 900px;
+  top: -460px;
+  right: -320px;
+  border: 1px solid rgba(2, 90, 242, 0.08);
+  animation: orbit 120s linear infinite;
+}
+.ring.r2 {
+  width: 620px;
+  height: 620px;
+  bottom: -320px;
+  left: -220px;
+  border: 1px solid rgba(255, 197, 71, 0.06);
+  animation: orbit 95s linear infinite reverse;
+}
+[data-theme='light'] .glow {
+  opacity: 0.5;
+}
+@keyframes twinkle {
+  0% {
+    opacity: 0.5;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes orbit {
+  0% {
+    transform: rotate(0);
+  }
+  to {
+    transform: rotate(1turn);
+  }
+}
+@keyframes pulse-dot {
+  0%,
+  to {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+@keyframes shimmer {
+  0% {
+    background-position: -400px 0;
+  }
+  to {
+    background-position: 400px 0;
+  }
+}
+.pulse {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .stars,
+  .ring,
+  .pulse {
+    animation: none !important;
+  }
+  * {
+    scroll-behavior: auto !important;
+  }
+}
+
+/* content sits above the atmosphere */
+.shell {
+  position: relative;
+  z-index: 2;
+}
+
+/* skeleton shimmer for loading states */
+.skel {
+  background: linear-gradient(90deg, var(--bg-surface) 25%, var(--bg-card-hover) 37%, var(--bg-surface) 63%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s linear infinite;
+  border-radius: 6px;
+  display: inline-block;
+}
+@media (prefers-reduced-motion: reduce) {
+  .skel {
+    animation: none;
+  }
+}
+
+/* thin custom scrollbar for dropdown lists */
+.scroll-thin::-webkit-scrollbar {
+  width: 8px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: var(--border-hover);
+  border-radius: 4px;
+}
