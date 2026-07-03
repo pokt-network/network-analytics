@@ -5,7 +5,8 @@ import { IconSearch, IconCpu, IconBolt, IconServer2, IconCoin, IconChartLine, Ic
 import { type RangeKey, RANGE_SPECS } from '@/lib/app-config';
 import { useTabData } from '@/lib/use-tab-data';
 import type { ServiceDetail } from '@/lib/data/services';
-import { formatCompact } from '@/lib/format';
+import type { ServiceAnalyticsRow } from '@/app/api/services/analytics/route';
+import { formatCompact, formatNumber } from '@/lib/format';
 import { StatCard } from '@/components/ui/StatCard';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { TimeSeriesChart } from '@/components/charts/TimeSeriesChart';
@@ -17,15 +18,19 @@ const LIST_PAGE_SIZE = 50;
 
 export function ServicesTab({ range }: { range: RangeKey }) {
   const [svc, setSvc] = useState<ServiceItem | null>(null);
-  const list = useTabData<{ services: ServiceItem[] }>('/api/services/list');
+  // Top-level analytics table (range-aware suppliers + CU), and the full id/name list for the picker.
+  const analytics = useTabData<{ services: ServiceAnalyticsRow[] }>(`/api/services/analytics?range=${range}`);
+  const pickerList = useTabData<{ services: ServiceItem[] }>('/api/services/list');
   const detailUrl = svc ? `/api/services?serviceId=${encodeURIComponent(svc.id)}&range=${range}` : '';
   const { data, error } = useTabData<ServiceDetail>(detailUrl);
 
-  const services = list.data?.services ?? [];
+  const rows = analytics.data?.services ?? [];
 
-  const listColumns: Column<ServiceItem>[] = [
+  const columns: Column<ServiceAnalyticsRow>[] = [
     { key: 'service', header: 'Service', sortValue: (r) => r.id, render: (r) => <span className="font-medium text-blue-soft">{r.id}</span> },
     { key: 'name', header: 'Name', sortValue: (r) => r.name, render: (r) => r.name || '—' },
+    { key: 'suppliers', header: 'Suppliers', align: 'right', sortValue: (r) => r.suppliers, render: (r) => formatNumber(r.suppliers) },
+    { key: 'cu', header: `CU (${range})`, align: 'right', sortValue: (r) => r.cu, render: (r) => formatCompact(r.cu) },
   ];
 
   return (
@@ -45,33 +50,33 @@ export function ServicesTab({ range }: { range: RangeKey }) {
                 All services
               </button>
             ) : (
-              <span className="text-[11px] text-text-secondary">{services.length || '100+'} services on network</span>
+              <span className="text-[11px] text-text-secondary">{pickerList.data?.services.length || '100+'} services on network</span>
             )
           }
         />
-        <ServicePicker onSelect={setSvc} selectedLabel={svc ? `${svc.id} — ${svc.name}` : undefined} items={services} />
+        <ServicePicker onSelect={setSvc} selectedLabel={svc ? `${svc.id} — ${svc.name}` : undefined} items={pickerList.data?.services ?? []} />
       </Card>
 
-      {/* Default view: browsable, paginated list of all services. */}
+      {/* Default view: service analytics — suppliers + windowed CU, sortable. */}
       {!svc && (
         <Card>
-          <CardHeader title="All Services" icon={<IconList size={18} />} tag={`${services.length} total`} />
-          {list.error ? (
-            <ErrorState>Couldn’t load services: {list.error}</ErrorState>
-          ) : !list.data ? (
-            <ChartSkeleton height={200} />
+          <CardHeader title="Service Analytics" icon={<IconList size={18} />} tag={`${rows.length} active · CU over ${range}`} />
+          {analytics.error ? (
+            <ErrorState>Couldn’t load services: {analytics.error}</ErrorState>
+          ) : !analytics.data ? (
+            <ChartSkeleton height={220} />
           ) : (
             <DataTable
-              rows={services}
-              columns={listColumns}
+              rows={rows}
+              columns={columns}
               rowKey={(r) => r.id}
               searchText={(r) => `${r.id} ${r.name}`}
               searchPlaceholder="Search service…"
-              initialSortKey="service"
-              initialSortDir="asc"
+              initialSortKey="cu"
+              initialSortDir="desc"
               pageSize={LIST_PAGE_SIZE}
               unit="services"
-              onRowClick={(r) => setSvc(r)}
+              onRowClick={(r) => setSvc({ id: r.id, name: r.name })}
             />
           )}
         </Card>
