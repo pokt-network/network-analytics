@@ -18,7 +18,7 @@ const TABS: (TabDef & { key: TabKey })[] = [
   { key: 'economy', label: 'Economy', icon: <IconCoin size={17} /> },
   { key: 'network', label: 'Network', icon: <IconAffiliate size={17} /> },
   { key: 'suppliers', label: 'Suppliers', icon: <IconServer2 size={17} /> },
-  { key: 'services', label: 'Services', icon: <IconStack2 size={17} />, badge: 'new' },
+  { key: 'services', label: 'Services', icon: <IconStack2 size={17} /> },
 ];
 
 export function Dashboard() {

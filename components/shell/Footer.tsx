@@ -9,7 +9,7 @@ export function Footer() {
           <a href="https://x.com/POKTnetwork" target="_blank" rel="noopener noreferrer" aria-label="X" className="grid h-[30px] w-[30px] place-items-center rounded-lg border text-text-secondary transition-colors hover:border-line-hover hover:text-text-primary">
             <IconBrandX size={17} />
           </a>
-          <a href="https://discord.gg/pokt" target="_blank" rel="noopener noreferrer" aria-label="Discord" className="grid h-[30px] w-[30px] place-items-center rounded-lg border text-text-secondary transition-colors hover:border-line-hover hover:text-text-primary">
+          <a href="https://discord.gg/pocket-network" target="_blank" rel="noopener noreferrer" aria-label="Discord" className="grid h-[30px] w-[30px] place-items-center rounded-lg border text-text-secondary transition-colors hover:border-line-hover hover:text-text-primary">
             <IconBrandDiscord size={17} />
           </a>
           <a href="https://github.com/pokt-network" target="_blank" rel="noopener noreferrer" aria-label="GitHub" className="grid h-[30px] w-[30px] place-items-center rounded-lg border text-text-secondary transition-colors hover:border-line-hover hover:text-text-primary">
