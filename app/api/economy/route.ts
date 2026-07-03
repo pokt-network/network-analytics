@@ -81,7 +81,7 @@ async function buildEconomy(): Promise<EconomyResponse> {
 }
 
 export async function GET() {
-  // Economy is long-horizon and derived from several resolvers → cache the assembled payload 10 min.
-  const payload = await unstable_cache(() => buildEconomy(), ['economy'], { revalidate: 600 })();
+  // Economy is long-horizon and derived from several resolvers → cache long; warmer keeps it fresh.
+  const payload = await unstable_cache(() => buildEconomy(), ['economy'], { revalidate: 1800, tags: ['analytics'] })();
   return NextResponse.json(payload);
 }

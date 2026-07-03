@@ -39,6 +39,15 @@ export function isRangeKey(v: string | null | undefined): v is RangeKey {
   return v != null && (RANGE_KEYS as string[]).includes(v);
 }
 
+/** Ranges the cron warmer proactively keeps hot (the common selections). Other ranges rely on TTL. */
+export const WARM_RANGES: RangeKey[] = ['7d', '30d'];
+
+/** Cache tag for entries the warmer refreshes — only the warmed ranges get tagged so a
+ *  revalidate doesn't cold-bust the less-common ranges it won't repopulate. */
+export function warmTag(range: RangeKey): string[] {
+  return WARM_RANGES.includes(range) ? ['analytics'] : [];
+}
+
 /** Series palette for multi-line/donut charts. Network total uses the neutral gray. */
 export const NETWORK_TOTAL_COLOR = '#8e9aa3';
 export const SERIES_COLORS = [

@@ -28,7 +28,9 @@ export function fixedWindow(seconds: number, now: number = Date.now()) {
   };
 }
 
-/** ISR TTL: the trailing/live (hourly) window refreshes fast; day/week windows cache longer. */
+/** Cache TTL. Long enough that the cron warmer keeps entries fresh between runs; the 24h (hourly)
+ *  window stays shorter since it moves faster. These are analytics, not real-time — minutes of
+ *  staleness is fine (the live strip stays live separately). */
 export function rangeTTL(range: RangeKey): number {
-  return range === '24h' ? 60 : 300;
+  return range === '24h' ? 600 : 1800;
 }

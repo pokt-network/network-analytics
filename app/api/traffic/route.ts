@@ -5,7 +5,7 @@ import { getRolling24hStats } from '@/lib/data/rewards';
 import { getLatestSnapshot } from '@/lib/data/snapshots';
 import { getServicesCount } from '@/lib/data/services-meta';
 import { rangeTTL } from '@/lib/timeranges';
-import { DEFAULT_RANGE, isRangeKey, type RangeKey } from '@/lib/app-config';
+import { DEFAULT_RANGE, isRangeKey, warmTag, type RangeKey } from '@/lib/app-config';
 
 export interface TrafficStats {
   relays24h: number;
@@ -69,6 +69,9 @@ export async function GET(req: NextRequest) {
   const rangeParam = req.nextUrl.searchParams.get('range');
   const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
   // Cache the assembled payload so cold-after-warm loads don't re-hit the slow indexer resolvers.
-  const payload = await unstable_cache(() => buildTraffic(range), ['traffic', range], { revalidate: rangeTTL(range) })();
+  const payload = await unstable_cache(() => buildTraffic(range), ['traffic', range], {
+    revalidate: rangeTTL(range),
+    tags: warmTag(range),
+  })();
   return NextResponse.json(payload);
 }

@@ -56,13 +56,19 @@ Records the §9 DECIDE/PROBE items from the build brief and the calls made durin
 ## Performance / caching
 
 The load time is bounded by the **indexer**, not our code — `servicesPerformanceBetweenTimes` alone
-takes ~3.8s. Two layers cache it:
+takes ~3.8s. Layers:
 - `gqlFetch` sets `next.revalidate` per query (Next Data Cache).
 - Each heavy route (`/api/traffic|network|suppliers|economy|services*`) wraps its assembled payload
-  in `unstable_cache` keyed by range. Measured: **cold ~1.6–4.3s, warm ~8ms**. `next dev` disables
-  the fetch cache, so a fresh dev process pays the cold hit once per key; production keeps both.
-- If cold latency needs to disappear entirely, add a Vercel Cron warmer that pre-hits the standard
-  (range × tab) keys, or precompute those payloads to Blob.
+  in `unstable_cache` keyed by range (stale-while-revalidate). Measured: **cold ~4s, warm ~8ms**.
+  The only slow hit is the *first* population of each `(tab × range)` key.
+- **Cache warmer** — `/api/cron/warm` pre-populates the common keys (`7d`/`30d` for every tab +
+  economy + services list) so a user's first visit is already warm. Scheduled in `vercel.json`
+  every 10 min. TTLs are 30 min (10 min for the 24h range); the warmer keeps entries fresh/from
+  going cold between visits. Uncommon ranges (24h/60d) warm on first use then cache.
+  - **Vercel plan note:** `*/10` cadence needs **Pro**; on **Hobby** cron runs ~once/day, so lean on
+    the TTLs there (raise `rangeTTL` if needed).
+  - Set **`CRON_SECRET`** in Vercel — the route rejects unauthorized calls when it's set, and Vercel
+    Cron passes it automatically. Hit `/api/cron/warm` manually to test; it returns `{warmed,total}`.
 
 ## Trailing-bucket projection
 

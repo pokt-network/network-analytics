@@ -2,8 +2,8 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { unstable_cache } from 'next/cache';
 import { getSnapshots } from '@/lib/data/snapshots';
 import { getDomainTable, type DomainRow } from '@/lib/data/suppliers';
-import { rangeWindow } from '@/lib/timeranges';
-import { DEFAULT_RANGE, isRangeKey, type RangeKey } from '@/lib/app-config';
+import { rangeWindow, rangeTTL } from '@/lib/timeranges';
+import { DEFAULT_RANGE, isRangeKey, warmTag, type RangeKey } from '@/lib/app-config';
 import { UPOKT_PER_POKT } from '@/lib/config';
 
 export interface SupplierStats {
@@ -64,7 +64,10 @@ async function buildSuppliers(range: RangeKey): Promise<SuppliersResponse> {
 export async function GET(req: NextRequest) {
   const rangeParam = req.nextUrl.searchParams.get('range');
   const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
-  // Suppliers change slowly and the per-domain stats are heavy → cache 10 min.
-  const payload = await unstable_cache(() => buildSuppliers(range), ['suppliers', range], { revalidate: 600 })();
+  // Suppliers change slowly and the per-domain stats are heavy → cache long, warmer keeps it fresh.
+  const payload = await unstable_cache(() => buildSuppliers(range), ['suppliers', range], {
+    revalidate: rangeTTL(range),
+    tags: warmTag(range),
+  })();
   return NextResponse.json(payload);
 }
