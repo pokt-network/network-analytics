@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { IconSearch, IconCpu, IconBolt, IconServer2, IconCoin, IconChartLine, IconInfoCircle } from '@tabler/icons-react';
+import { IconSearch, IconCpu, IconBolt, IconServer2, IconCoin, IconChartLine, IconInfoCircle, IconList, IconArrowLeft } from '@tabler/icons-react';
 import { type RangeKey, RANGE_SPECS } from '@/lib/app-config';
 import { useTabData } from '@/lib/use-tab-data';
 import type { ServiceDetail } from '@/lib/data/services';
@@ -9,22 +9,74 @@ import { formatCompact } from '@/lib/format';
 import { StatCard } from '@/components/ui/StatCard';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { TimeSeriesChart } from '@/components/charts/TimeSeriesChart';
-import { ChartSkeleton, ErrorState, EmptyState } from '@/components/ui/states';
+import { DataTable, type Column } from '@/components/ui/DataTable';
+import { ChartSkeleton, ErrorState } from '@/components/ui/states';
 import { ServicePicker, type ServiceItem } from './ServicePicker';
+
+const LIST_PAGE_SIZE = 50;
 
 export function ServicesTab({ range }: { range: RangeKey }) {
   const [svc, setSvc] = useState<ServiceItem | null>(null);
-  const url = svc ? `/api/services?serviceId=${encodeURIComponent(svc.id)}&range=${range}` : '';
-  const { data, error } = useTabData<ServiceDetail>(url);
+  const list = useTabData<{ services: ServiceItem[] }>('/api/services/list');
+  const detailUrl = svc ? `/api/services?serviceId=${encodeURIComponent(svc.id)}&range=${range}` : '';
+  const { data, error } = useTabData<ServiceDetail>(detailUrl);
+
+  const services = list.data?.services ?? [];
+
+  const listColumns: Column<ServiceItem>[] = [
+    { key: 'service', header: 'Service', sortValue: (r) => r.id, render: (r) => <span className="font-medium text-blue-soft">{r.id}</span> },
+    { key: 'name', header: 'Name', sortValue: (r) => r.name, render: (r) => r.name || '—' },
+  ];
 
   return (
     <div className="flex flex-col gap-4">
       <Card>
-        <CardHeader title="Find a Service" icon={<IconSearch size={18} />} tag="100+ services on network" />
-        <ServicePicker onSelect={setSvc} selectedLabel={svc ? `${svc.id} — ${svc.name}` : undefined} />
+        <CardHeader
+          title="Find a Service"
+          icon={<IconSearch size={18} />}
+          right={
+            svc ? (
+              <button
+                type="button"
+                onClick={() => setSvc(null)}
+                className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[13px] font-medium text-text-secondary hover:border-line-hover hover:text-text-primary"
+              >
+                <IconArrowLeft size={14} />
+                All services
+              </button>
+            ) : (
+              <span className="text-[11px] text-text-secondary">{services.length || '100+'} services on network</span>
+            )
+          }
+        />
+        <ServicePicker onSelect={setSvc} selectedLabel={svc ? `${svc.id} — ${svc.name}` : undefined} items={services} />
       </Card>
 
-      {!svc && <EmptyState>Pick a service to see its volume, participation, and reward share.</EmptyState>}
+      {/* Default view: browsable, paginated list of all services. */}
+      {!svc && (
+        <Card>
+          <CardHeader title="All Services" icon={<IconList size={18} />} tag={`${services.length} total`} />
+          {list.error ? (
+            <ErrorState>Couldn’t load services: {list.error}</ErrorState>
+          ) : !list.data ? (
+            <ChartSkeleton height={200} />
+          ) : (
+            <DataTable
+              rows={services}
+              columns={listColumns}
+              rowKey={(r) => r.id}
+              searchText={(r) => `${r.id} ${r.name}`}
+              searchPlaceholder="Search service…"
+              initialSortKey="service"
+              initialSortDir="asc"
+              pageSize={LIST_PAGE_SIZE}
+              unit="services"
+              onRowClick={(r) => setSvc(r)}
+            />
+          )}
+        </Card>
+      )}
+
       {svc && error && <ErrorState>Couldn’t load service data: {error}</ErrorState>}
       {svc && !data && !error && (
         <Card>

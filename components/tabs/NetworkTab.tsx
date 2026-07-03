@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import {
   IconShieldCheck,
   IconServer2,
@@ -14,15 +15,18 @@ import { useTabData } from '@/lib/use-tab-data';
 import type { NetworkResponse } from '@/app/api/network/route';
 import { formatNumber, formatCompact } from '@/lib/format';
 import { StatCard } from '@/components/ui/StatCard';
-import { Card, CardHeader } from '@/components/ui/Card';
+import { Card, CardHeader, CardTag } from '@/components/ui/Card';
 import { AreaTimeChart } from '@/components/charts/AreaTimeChart';
 import { TimeSeriesChart } from '@/components/charts/TimeSeriesChart';
+import { TimeChart, type ChartType } from '@/components/charts/TimeChart';
+import { ChartTypeToggle } from '@/components/charts/ChartTypeToggle';
 import { ChartSkeleton, ErrorState } from '@/components/ui/states';
 
 const SNAP = 'as of last daily snapshot';
 
 export function NetworkTab({ range }: { range: RangeKey }) {
   const { data, error } = useTabData<NetworkResponse>(`/api/network?range=${range}`);
+  const [claimsType, setClaimsType] = useState<ChartType>('area');
 
   if (error) return <ErrorState>Couldn’t load network data: {error}</ErrorState>;
   if (!data) return <Loading />;
@@ -39,7 +43,16 @@ export function NetworkTab({ range }: { range: RangeKey }) {
       </div>
 
       <Card>
-        <CardHeader title="Claims / Proofs / Expired" icon={<IconChartLine size={18} />} tag={`${range} · claimed computed units`} />
+        <CardHeader
+          title="Claims / Proofs / Expired"
+          icon={<IconChartLine size={18} />}
+          right={
+            <div className="flex items-center gap-2.5">
+              <CardTag>{range} · claimed CU</CardTag>
+              <ChartTypeToggle value={claimsType} onChange={setClaimsType} options={['area', 'bar']} />
+            </div>
+          }
+        />
         <Legend
           items={[
             { label: 'Claim', color: 'var(--lavender)' },
@@ -47,7 +60,7 @@ export function NetworkTab({ range }: { range: RangeKey }) {
             { label: 'Expired Proof', color: 'var(--coral)' },
           ]}
         />
-        <AreaTimeChart
+        <TimeChart
           data={data.claims as unknown as Array<Record<string, number | string>>}
           series={[
             { key: 'claimCU', color: 'var(--lavender)', label: 'Claim' },
@@ -55,6 +68,8 @@ export function NetworkTab({ range }: { range: RangeKey }) {
             { key: 'expiredCU', color: 'var(--coral)', label: 'Expired Proof' },
           ]}
           interval={data.interval}
+          type={claimsType}
+          projected
           height={340}
         />
       </Card>

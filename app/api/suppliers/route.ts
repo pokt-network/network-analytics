@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { unstable_cache } from 'next/cache';
 import { getSnapshots } from '@/lib/data/snapshots';
 import { getDomainTable, type DomainRow } from '@/lib/data/suppliers';
 import { rangeWindow } from '@/lib/timeranges';
@@ -27,9 +28,7 @@ export interface SuppliersResponse {
   interval: 'hour' | 'day' | 'week';
 }
 
-export async function GET(req: NextRequest) {
-  const rangeParam = req.nextUrl.searchParams.get('range');
-  const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
+async function buildSuppliers(range: RangeKey): Promise<SuppliersResponse> {
   const w = rangeWindow(range);
 
   const [snaps, domains] = await Promise.all([getSnapshots(w.startISO, w.endISO, 3600), getDomainTable()]);
@@ -52,12 +51,20 @@ export async function GET(req: NextRequest) {
   const concentration =
     othersShare > 0 ? [...top, { domain: `others (${domains.length - TOP})`, sharePct: othersShare }] : top;
 
-  return NextResponse.json({
+  return {
     range,
     stats,
     evolution: snaps.map((s) => ({ date: s.date, suppliers: s.stakedSuppliers, stakedPokt: s.supplierTokens / UPOKT_PER_POKT })),
     domains,
     concentration,
     interval: w.interval,
-  } satisfies SuppliersResponse);
+  };
+}
+
+export async function GET(req: NextRequest) {
+  const rangeParam = req.nextUrl.searchParams.get('range');
+  const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
+  // Suppliers change slowly and the per-domain stats are heavy → cache 10 min.
+  const payload = await unstable_cache(() => buildSuppliers(range), ['suppliers', range], { revalidate: 600 })();
+  return NextResponse.json(payload);
 }

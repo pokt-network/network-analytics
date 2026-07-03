@@ -22,6 +22,7 @@ interface Props<T> {
   initialSortDir?: 'asc' | 'desc';
   rowKey: (row: T) => string;
   unit?: string; // e.g. "services", "domains" — for the "N services" caption
+  onRowClick?: (row: T) => void;
 }
 
 export function DataTable<T>({
@@ -34,6 +35,7 @@ export function DataTable<T>({
   initialSortDir = 'desc',
   rowKey,
   unit = 'rows',
+  onRowClick,
 }: Props<T>) {
   const [query, setQuery] = useState('');
   const [sortKey, setSortKey] = useState<string | undefined>(initialSortKey);
@@ -129,7 +131,11 @@ export function DataTable<T>({
           </thead>
           <tbody>
             {pageRows.map((r) => (
-              <tr key={rowKey(r)} className="hover:bg-bg-card-hover">
+              <tr
+                key={rowKey(r)}
+                onClick={onRowClick ? () => onRowClick(r) : undefined}
+                className={`hover:bg-bg-card-hover ${onRowClick ? 'cursor-pointer' : ''}`}
+              >
                 {columns.map((c) => (
                   <td
                     key={c.key}

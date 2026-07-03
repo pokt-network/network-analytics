@@ -1,8 +1,10 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { unstable_cache } from 'next/cache';
 import { getTrafficSeries, getServicesPerformance, type TrafficSeries, type ServicePerf } from '@/lib/data/traffic';
 import { getRolling24hStats } from '@/lib/data/rewards';
 import { getLatestSnapshot } from '@/lib/data/snapshots';
 import { getServicesCount } from '@/lib/data/services-meta';
+import { rangeTTL } from '@/lib/timeranges';
 import { DEFAULT_RANGE, isRangeKey, type RangeKey } from '@/lib/app-config';
 
 export interface TrafficStats {
@@ -29,10 +31,7 @@ export interface TrafficResponse {
   donut: DonutSlice[];
 }
 
-export async function GET(req: NextRequest) {
-  const rangeParam = req.nextUrl.searchParams.get('range');
-  const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
-
+async function buildTraffic(range: RangeKey): Promise<TrafficResponse> {
   // 24h stat cards use a fixed rolling window (brief §5.1), independent of the range pills.
   const [series, performance, rolling, snapshot, totalServices] = await Promise.all([
     getTrafficSeries(range),
@@ -63,5 +62,13 @@ export async function GET(req: NextRequest) {
   const donut: DonutSlice[] =
     othersShare > 0 ? [...top, { serviceId: '__others__', name: 'others', sharePct: othersShare }] : top;
 
-  return NextResponse.json({ range, stats, series, performance, donut } satisfies TrafficResponse);
+  return { range, stats, series, performance, donut };
+}
+
+export async function GET(req: NextRequest) {
+  const rangeParam = req.nextUrl.searchParams.get('range');
+  const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
+  // Cache the assembled payload so cold-after-warm loads don't re-hit the slow indexer resolvers.
+  const payload = await unstable_cache(() => buildTraffic(range), ['traffic', range], { revalidate: rangeTTL(range) })();
+  return NextResponse.json(payload);
 }

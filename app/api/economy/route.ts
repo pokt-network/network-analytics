@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { unstable_cache } from 'next/cache';
 import {
   getSupplyHistory,
   getNetInflationPctYr,
@@ -41,7 +42,7 @@ export interface EconomyResponse {
 // Economy widgets are long-horizon (supply 1yr, burn/mint 7d, projection 2yr, composition current),
 // so they don't follow the range pills. All derived LIVE — no settlement-table precompute (gross
 // mint/burn = Σclaimed × mint_ratio; net inflation = total_supply delta).
-export async function GET() {
+async function buildEconomy(): Promise<EconomyResponse> {
   const mintRatio = await getMintRatio();
   const yearWin = fixedWindow(365 * 86400);
   const week = fixedWindow(7 * 86400);
@@ -64,7 +65,7 @@ export async function GET() {
     return t >= Date.parse(yearWin.startISO) && t <= Date.parse(yearWin.endISO);
   });
 
-  return NextResponse.json({
+  return {
     stats: {
       netInflationPctYr,
       totalSupplyPokt: supply0,
@@ -77,5 +78,11 @@ export async function GET() {
     composition,
     burnMint: burnMint7d,
     projection: buildProjection(supply0, avgDailyClaimedPokt, mintRatio),
-  } satisfies EconomyResponse);
+  };
+}
+
+export async function GET() {
+  // Economy is long-horizon and derived from several resolvers → cache the assembled payload 10 min.
+  const payload = await unstable_cache(() => buildEconomy(), ['economy'], { revalidate: 600 })();
+  return NextResponse.json(payload);
 }

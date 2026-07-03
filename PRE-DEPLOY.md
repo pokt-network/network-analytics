@@ -53,6 +53,25 @@ Records the §9 DECIDE/PROBE items from the build brief and the calls made durin
 - [ ] `data/supply-events.json` reviewed by PNF (currently seeds only the verified PIP-41 pin).
 - [ ] Owner Staking reward-issuance links resolve to the explorer tx page.
 
+## Performance / caching
+
+The load time is bounded by the **indexer**, not our code — `servicesPerformanceBetweenTimes` alone
+takes ~3.8s. Two layers cache it:
+- `gqlFetch` sets `next.revalidate` per query (Next Data Cache).
+- Each heavy route (`/api/traffic|network|suppliers|economy|services*`) wraps its assembled payload
+  in `unstable_cache` keyed by range. Measured: **cold ~1.6–4.3s, warm ~8ms**. `next dev` disables
+  the fetch cache, so a fresh dev process pays the cold hit once per key; production keeps both.
+- If cold latency needs to disappear entirely, add a Vercel Cron warmer that pre-hits the standard
+  (range × tab) keys, or precompute those payloads to Blob.
+
+## Trailing-bucket projection
+
+Time-series use daily/hourly buckets ending "now", so the current bucket is partial and would read as
+a false downward step. `TimeChart` projects it to a full-period estimate (`actual / elapsed_fraction`)
+and draws it **dashed** (line/area) or **translucent** (bar) — matching PoktScan's end-of-day
+projection. Applied to Traffic Over Time, Claims/Proofs, and Burn vs Mint. Each of those charts also
+has a line/area↔bar toggle.
+
 ## Known v1 limitations
 
 - Snapshot-based charts (Network/Suppliers evolution) are **daily** (`getLatestBlocksByDay`), so a

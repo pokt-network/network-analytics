@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { unstable_cache } from 'next/cache';
 import { getSnapshots } from '@/lib/data/snapshots';
 import { getClaimProofs, type ClaimProofPoint } from '@/lib/data/claims';
-import { rangeWindow } from '@/lib/timeranges';
+import { rangeWindow, rangeTTL } from '@/lib/timeranges';
 import { DEFAULT_RANGE, isRangeKey, type RangeKey } from '@/lib/app-config';
 import { UPOKT_PER_POKT } from '@/lib/config';
 
@@ -22,9 +23,7 @@ export interface NetworkResponse {
   interval: 'hour' | 'day' | 'week';
 }
 
-export async function GET(req: NextRequest) {
-  const rangeParam = req.nextUrl.searchParams.get('range');
-  const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
+async function buildNetwork(range: RangeKey): Promise<NetworkResponse> {
   const w = rangeWindow(range);
 
   const [snaps, claims] = await Promise.all([getSnapshots(w.startISO, w.endISO, 3600), getClaimProofs(range)]);
@@ -39,7 +38,7 @@ export async function GET(req: NextRequest) {
     snapshotDate: latest?.date ?? null,
   };
 
-  return NextResponse.json({
+  return {
     range,
     stats,
     claims,
@@ -57,5 +56,12 @@ export async function GET(req: NextRequest) {
       appPokt: toPokt(s.appTokens),
     })),
     interval: w.interval,
-  } satisfies NetworkResponse);
+  };
+}
+
+export async function GET(req: NextRequest) {
+  const rangeParam = req.nextUrl.searchParams.get('range');
+  const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
+  const payload = await unstable_cache(() => buildNetwork(range), ['network', range], { revalidate: rangeTTL(range) })();
+  return NextResponse.json(payload);
 }

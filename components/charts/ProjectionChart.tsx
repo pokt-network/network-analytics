@@ -23,7 +23,7 @@ export function ProjectionChart({ data, height = 240 }: { data: ProjPoint[]; hei
           <CartesianGrid stroke={GRID} vertical={false} />
           <XAxis dataKey="label" tick={{ fill: AXIS, fontSize: 11 }} stroke={GRID} />
           <YAxis
-            domain={['dataMin', 'dataMax']}
+            domain={[1_000_000_000, 'dataMax']}
             tickFormatter={(v) => fmtNum(Number(v))}
             tick={{ fill: AXIS, fontSize: 11 }}
             stroke={GRID}

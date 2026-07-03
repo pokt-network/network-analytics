@@ -16,10 +16,12 @@ export interface SeriesTooltipProps {
 
 export function SeriesTooltip({ active, payload, label, yFmt = fmtNum, labelFmt = fmtDateFull, fmtByKey, valueSuffix = '' }: SeriesTooltipProps) {
   if (!active || !payload?.length) return null;
+  const rows = payload.filter((p) => p.value != null);
+  if (!rows.length) return null;
   return (
     <div className="rounded-lg border border-line-hover bg-bg-card px-3 py-2 text-[12px] shadow-[0_8px_24px_rgba(0,0,0,.3)]">
       <div className="mb-1 font-medium text-text-secondary">{labelFmt(String(label))}</div>
-      {payload.map((p) => {
+      {rows.map((p) => {
         const fmt = fmtByKey?.[String(p.dataKey)] ?? yFmt;
         return (
           <div key={String(p.dataKey)} className="flex items-center gap-2">

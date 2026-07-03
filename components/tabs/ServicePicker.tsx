@@ -9,18 +9,28 @@ export interface ServiceItem {
 }
 
 // Searchable type-ahead over service id + label (100+ services — a picker, not a chip row).
-export function ServicePicker({ onSelect, selectedLabel }: { onSelect: (s: ServiceItem) => void; selectedLabel?: string }) {
-  const [items, setItems] = useState<ServiceItem[]>([]);
+export function ServicePicker({
+  onSelect,
+  selectedLabel,
+  items: preloaded,
+}: {
+  onSelect: (s: ServiceItem) => void;
+  selectedLabel?: string;
+  items?: ServiceItem[];
+}) {
+  const [fetched, setFetched] = useState<ServiceItem[]>([]);
+  const items = preloaded ?? fetched;
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (preloaded) return;
     fetch('/api/services/list')
       .then((r) => r.json())
-      .then((d) => setItems(d.services ?? []))
+      .then((d) => setFetched(d.services ?? []))
       .catch(() => {});
-  }, []);
+  }, [preloaded]);
 
   useEffect(() => {
     function onDoc(e: MouseEvent) {

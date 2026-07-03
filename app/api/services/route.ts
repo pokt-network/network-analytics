@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { unstable_cache } from 'next/cache';
 import { getServiceDetail } from '@/lib/data/services';
+import { rangeTTL } from '@/lib/timeranges';
 import { DEFAULT_RANGE, isRangeKey, type RangeKey } from '@/lib/app-config';
 
 export async function GET(req: NextRequest) {
@@ -8,6 +10,8 @@ export async function GET(req: NextRequest) {
   const rangeParam = req.nextUrl.searchParams.get('range');
   const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
 
-  const detail = await getServiceDetail(serviceId, range);
+  const detail = await unstable_cache(() => getServiceDetail(serviceId, range), ['service', serviceId, range], {
+    revalidate: rangeTTL(range),
+  })();
   return NextResponse.json(detail);
 }

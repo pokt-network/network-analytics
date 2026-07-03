@@ -9,7 +9,8 @@ import type { ServicePerf } from '@/lib/data/traffic';
 import { formatCompact, formatNumber } from '@/lib/format';
 import { StatCard, type Trend } from '@/components/ui/StatCard';
 import { Card, CardHeader, CardTag } from '@/components/ui/Card';
-import { TimeSeriesChart, type SeriesDef } from '@/components/charts/TimeSeriesChart';
+import { TimeChart, type SeriesDef, type ChartType } from '@/components/charts/TimeChart';
+import { ChartTypeToggle } from '@/components/charts/ChartTypeToggle';
 import { DonutChart, type DonutDatum } from '@/components/charts/DonutChart';
 import { DataTable, type Column } from '@/components/ui/DataTable';
 import { MultiSelect, type MultiOption } from '@/components/ui/MultiSelect';
@@ -27,6 +28,7 @@ function changeSub(pct: number) {
 
 export function TrafficTab({ range }: { range: RangeKey }) {
   const { data, error } = useTabData<TrafficResponse>(`/api/traffic?range=${range}`);
+  const [chartType, setChartType] = useState<ChartType>('line');
   // User's series selection, scoped to the range it was made in (so a range switch falls back to
   // the fresh default without a state-syncing effect).
   const [selOverride, setSelOverride] = useState<{ range: RangeKey; set: Set<string> } | null>(null);
@@ -155,6 +157,7 @@ export function TrafficTab({ range }: { range: RangeKey }) {
           right={
             <div className="flex items-center gap-2.5">
               <CardTag>estimated CU</CardTag>
+              <ChartTypeToggle value={chartType} onChange={setChartType} options={['line', 'bar']} />
               <MultiSelect
                 options={msOptions}
                 selected={sel}
@@ -177,9 +180,9 @@ export function TrafficTab({ range }: { range: RangeKey }) {
             </span>
           ))}
         </div>
-        <TimeSeriesChart data={data.series.rows} series={chartSeries} interval={data.series.interval} height={360} />
+        <TimeChart data={data.series.rows} series={chartSeries} interval={data.series.interval} type={chartType} projected height={360} />
         <p className="mt-2 text-[12px] italic text-text-tertiary">
-          Default view: network total + top 5 services. Use the Services control to toggle any of the {data.series.services.length} sources. Estimated computed units (demand signal).
+          Default view: network total + top 5 services. Use the Services control to toggle any of the {data.series.services.length} sources. Estimated computed units (demand signal); the current day is dashed/projected to its full-day estimate.
         </p>
       </Card>
 

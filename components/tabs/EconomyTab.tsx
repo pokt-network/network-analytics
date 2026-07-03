@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import {
   IconArrowsDownUp,
   IconCoins,
@@ -14,9 +15,10 @@ import { useTabData } from '@/lib/use-tab-data';
 import type { EconomyResponse } from '@/app/api/economy/route';
 import { formatCompact } from '@/lib/format';
 import { StatCard } from '@/components/ui/StatCard';
-import { Card, CardHeader } from '@/components/ui/Card';
+import { Card, CardHeader, CardTag } from '@/components/ui/Card';
 import { SupplyHistoryChart } from '@/components/charts/SupplyHistoryChart';
-import { GroupedBarChart } from '@/components/charts/GroupedBarChart';
+import { TimeChart, type ChartType } from '@/components/charts/TimeChart';
+import { ChartTypeToggle } from '@/components/charts/ChartTypeToggle';
 import { ProjectionChart } from '@/components/charts/ProjectionChart';
 import { DonutChart, type DonutDatum } from '@/components/charts/DonutChart';
 import { ChartSkeleton, ErrorState } from '@/components/ui/states';
@@ -26,6 +28,7 @@ const COMP_COLORS = ['#5a656d', 'var(--lavender)', 'var(--blue-soft)', 'var(--mi
 
 export function EconomyTab() {
   const { data, error } = useTabData<EconomyResponse>('/api/economy');
+  const [burnMintType, setBurnMintType] = useState<ChartType>('bar');
 
   if (error) return <ErrorState>Couldn’t load economy data: {error}</ErrorState>;
   if (!data) return <Loading />;
@@ -95,20 +98,31 @@ export function EconomyTab() {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
-          <CardHeader title="Burn vs Mint" icon={<IconFlame size={18} />} tag="7d · gross" />
+          <CardHeader
+            title="Burn vs Mint"
+            icon={<IconFlame size={18} />}
+            right={
+              <div className="flex items-center gap-2.5">
+                <CardTag>7d · gross</CardTag>
+                <ChartTypeToggle value={burnMintType} onChange={setBurnMintType} options={['bar', 'line']} />
+              </div>
+            }
+          />
           <Legend
             items={[
               { label: 'Minted', color: 'var(--gold)' },
               { label: 'Burned', color: 'var(--coral)' },
             ]}
           />
-          <GroupedBarChart
+          <TimeChart
             data={data.burnMint as unknown as Array<Record<string, number | string>>}
-            bars={[
+            series={[
               { key: 'mintPokt', color: 'var(--gold)', label: 'Minted' },
               { key: 'burnPokt', color: 'var(--coral)', label: 'Burned' },
             ]}
             interval="day"
+            type={burnMintType}
+            projected
             height={240}
             yFmt={(n) => formatCompact(n)}
           />
