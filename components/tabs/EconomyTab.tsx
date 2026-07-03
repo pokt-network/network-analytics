@@ -139,8 +139,8 @@ export function EconomyTab() {
           <ProjectionChart data={data.projection} height={240} />
           <p className="mt-2 text-[12px] italic text-text-tertiary">
             All scenarios deflate — supply never grows. Low demand burns least (~−2% by +24mo),
-            high demand most (~−10%). Illustrative magnitudes; mechanistic model + scenario
-            definitions pending PNF sign-off.
+            high demand most (~−10%). These are illustrative magnitudes; actual burn levels depend
+            on network traffic and the deflation governance parameter.
           </p>
         </Card>
       </div>
