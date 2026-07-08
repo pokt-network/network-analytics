@@ -35,13 +35,19 @@ const BUCKET_MS: Record<'hour' | 'day' | 'week', number> = { hour: 3_600_000, da
 
 // End-of-period projection (PoktScan-style): the current bucket only covers `elapsed` of its period,
 // so `actual / elapsed` estimates its full-period total. `elapsed` is the fraction of the current
-// bucket that has passed; `false` means it's essentially complete (nothing to project).
+// bucket that has passed; `false` means "don't project".
+//
+// Only DAILY (and weekly) buckets are projected. A single partial hour is not: CU settles in bursts
+// (claims/proofs land in batches, not smoothly), so a big early-hour settlement makes `soFar` already
+// near a full hour's worth minutes in — extrapolating that by `soFar / elapsed` explodes into a
+// meaningless spike. Over a day those bursts average out, so `soFar / elapsed` is stable. We also
+// skip a barely-started bucket, where any extrapolation is unreliable, and a near-complete one.
 function elapsedFrac(data: Row[], interval: 'hour' | 'day' | 'week', xKey: string, nowMs: number): number | false {
-  if (data.length < 2) return false;
+  if (interval === 'hour' || data.length < 2) return false;
   const start = Date.parse(String(data[data.length - 1][xKey]));
   if (!Number.isFinite(start)) return false;
-  const elapsed = Math.min(1, Math.max(0.02, (nowMs - start) / BUCKET_MS[interval]));
-  return elapsed >= 0.985 ? false : elapsed;
+  const elapsed = (nowMs - start) / BUCKET_MS[interval];
+  return elapsed < 0.1 || elapsed >= 0.985 ? false : elapsed;
 }
 
 // Bars: keep the current bucket's confirmed value as the solid base and stack a translucent

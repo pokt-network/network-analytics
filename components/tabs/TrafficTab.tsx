@@ -207,7 +207,8 @@ export function TrafficTab({ range }: { range: RangeKey }) {
         </div>
         <TimeChart data={data.series.rows} series={chartSeries} interval={data.series.interval} type={chartType} projected height={360} />
         <p className="mt-2 text-[12px] italic text-text-tertiary">
-          Default view: network total + top 5 services. Use the Services control to toggle any of the {data.series.services.length} sources. Estimated computed units (demand signal); the current day is dashed/projected to its full-day estimate.
+          Default view: network total + top 5 services. Use the Services control to toggle any of the {data.series.services.length} sources. Estimated computed units (demand signal)
+          {data.series.interval !== 'hour' && '; the current day is dashed/projected to its full-day estimate'}.
         </p>
       </Card>
 
