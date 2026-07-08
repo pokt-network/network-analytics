@@ -11,8 +11,10 @@ import {
   IconTrendingDown,
   IconPin,
 } from '@tabler/icons-react';
+import { type RangeKey, RANGE_SPECS } from '@/lib/app-config';
 import { useTabData } from '@/lib/use-tab-data';
 import type { EconomyResponse } from '@/app/api/economy/route';
+import type { BurnMintResponse } from '@/app/api/economy/burnmint/route';
 import { formatCompact } from '@/lib/format';
 import { StatCard } from '@/components/ui/StatCard';
 import { Card, CardHeader, CardTag } from '@/components/ui/Card';
@@ -26,14 +28,17 @@ import { Legend } from './NetworkTab';
 
 const COMP_COLORS = ['#5a656d', 'var(--lavender)', 'var(--blue-soft)', 'var(--mint)', 'var(--gold)'];
 
-export function EconomyTab() {
+export function EconomyTab({ range }: { range: RangeKey }) {
   const { data, error } = useTabData<EconomyResponse>('/api/economy');
+  // Burn vs Mint follows the global range pills; the rest of the tab is long-horizon.
+  const burnMint = useTabData<BurnMintResponse>(`/api/economy/burnmint?range=${range}`);
   const [burnMintType, setBurnMintType] = useState<ChartType>('bar');
 
   if (error) return <ErrorState>Couldn’t load economy data: {error}</ErrorState>;
   if (!data) return <Loading />;
 
   const { stats } = data;
+  const bm = burnMint.data;
   const deflation = stats.netInflationPctYr <= 0;
 
   const compDonut: DonutDatum[] = data.composition.map((c, i) => ({
@@ -46,17 +51,16 @@ export function EconomyTab() {
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <StatCard
-          label="Net Inflation"
+          label="Supply Change"
           value={`${stats.netInflationPctYr > 0 ? '+' : ''}${stats.netInflationPctYr.toFixed(2)}`}
           unit="%/yr"
           icon={<IconArrowsDownUp size={15} />}
           iconColor="var(--mint)"
-          sub="burn ≈ mint (PIP-41)"
           subTrend={deflation ? 'up' : 'down'}
         />
-        <StatCard label="Total Supply" value={formatCompact(stats.totalSupplyPokt)} unit="POKT" icon={<IconCoins size={15} />} iconColor="var(--blue-soft)" sub="on-chain" />
-        <StatCard label="Burn (7d)" value={formatCompact(stats.burn7dPokt)} unit="POKT" icon={<IconFlame size={15} />} iconColor="var(--coral)" sub="claimed, burned" />
-        <StatCard label="Mint (7d)" value={formatCompact(stats.mint7dPokt)} unit="POKT" icon={<IconSparkles size={15} />} iconColor="var(--gold)" sub={`re-minted ×${stats.mintRatio}`} />
+        <StatCard label="Total Supply" value={formatCompact(stats.totalSupplyPokt)} unit="POKT" icon={<IconCoins size={15} />} iconColor="var(--blue-soft)" />
+        <StatCard label={`Burn (${range})`} value={bm ? formatCompact(bm.burnTotalPokt) : '—'} unit="POKT" icon={<IconFlame size={15} />} iconColor="var(--coral)" />
+        <StatCard label={`Mint (${range})`} value={bm ? formatCompact(bm.mintTotalPokt) : '—'} unit="POKT" icon={<IconSparkles size={15} />} iconColor="var(--gold)" />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.6fr_1fr]">
@@ -77,9 +81,6 @@ export function EconomyTab() {
             </div>
           )}
           <SupplyHistoryChart data={data.supplyHistory} pins={data.pins} height={320} />
-          <p className="mt-2 text-[12px] italic text-text-tertiary">
-            Pins from a version-controlled annotation file, rendered as escaped text.
-          </p>
         </Card>
         <Card>
           <CardHeader title="Supply Composition" icon={<IconChartPie size={18} />} tag="current" />
@@ -103,7 +104,7 @@ export function EconomyTab() {
             icon={<IconFlame size={18} />}
             right={
               <div className="flex items-center gap-2.5">
-                <CardTag>7d · gross</CardTag>
+                <CardTag>{range} · gross</CardTag>
                 <ChartTypeToggle value={burnMintType} onChange={setBurnMintType} options={['bar', 'line']} />
               </div>
             }
@@ -114,18 +115,24 @@ export function EconomyTab() {
               { label: 'Burned', color: 'var(--coral)' },
             ]}
           />
-          <TimeChart
-            data={data.burnMint as unknown as Array<Record<string, number | string>>}
-            series={[
-              { key: 'mintPokt', color: 'var(--gold)', label: 'Minted' },
-              { key: 'burnPokt', color: 'var(--coral)', label: 'Burned' },
-            ]}
-            interval="day"
-            type={burnMintType}
-            projected
-            height={240}
-            yFmt={(n) => formatCompact(n)}
-          />
+          {burnMint.error ? (
+            <ErrorState>Couldn’t load burn/mint: {burnMint.error}</ErrorState>
+          ) : !bm ? (
+            <ChartSkeleton height={240} />
+          ) : (
+            <TimeChart
+              data={bm.series as unknown as Array<Record<string, number | string>>}
+              series={[
+                { key: 'mintPokt', color: 'var(--gold)', label: 'Minted' },
+                { key: 'burnPokt', color: 'var(--coral)', label: 'Burned' },
+              ]}
+              interval={RANGE_SPECS[range].interval}
+              type={burnMintType}
+              projected
+              height={240}
+              yFmt={(n) => formatCompact(n)}
+            />
+          )}
         </Card>
         <Card>
           <CardHeader title="Supply Projection" icon={<IconTrendingDown size={18} />} tag="demand scenarios · simple" />

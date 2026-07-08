@@ -120,7 +120,7 @@ export function Dashboard({ initialTab, initialRange, initialService }: { initia
         {tab === 'traffic' && <TrafficTab range={range} onOpenService={openService} />}
         {tab === 'network' && <NetworkTab range={range} />}
         {tab === 'suppliers' && <SuppliersTab range={range} />}
-        {tab === 'economy' && <EconomyTab />}
+        {tab === 'economy' && <EconomyTab range={range} />}
         {tab === 'services' && <ServicesTab range={range} svc={svc} onSelectService={setSvc} />}
       </div>
     </>

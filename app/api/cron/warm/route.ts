@@ -29,6 +29,7 @@ export async function GET(req: NextRequest) {
       `${base}/api/network?range=${range}`,
       `${base}/api/suppliers?range=${range}`,
       `${base}/api/services/analytics?range=${range}`,
+      `${base}/api/economy/burnmint?range=${range}`,
     );
   }
 
