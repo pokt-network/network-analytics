@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { unstable_cache } from 'next/cache';
 import { getStatus } from '@/lib/metadata';
 import { INDEXER_LAG_THRESHOLD } from '@/lib/config';
 import { NETWORK } from '@/lib/app-config';
@@ -9,6 +10,11 @@ import { getNetInflationPctYr } from '@/lib/data/economy';
 // Live-strip heartbeat. Server-side so the browser never hits the indexer or CMC directly.
 // Polled by the LiveStrip client every 15s.
 export const dynamic = 'force-dynamic';
+
+// Micro-cache the assembled heartbeat so many concurrent sessions don't each pay the ~1.4s
+// indexer+CMC round-trip. 10s < the client's 15s poll, so the strip stays effectively live while
+// indexer/CMC load is bounded to one refresh per 10s regardless of traffic.
+const LIVE_TTL = 10;
 
 export interface LivePayload {
   block: number | null;
@@ -21,7 +27,7 @@ export interface LivePayload {
   netInflation: number | null;
 }
 
-export async function GET() {
+async function buildLive(): Promise<LivePayload> {
   const [statusRes, priceRes, rollingRes, inflationRes] = await Promise.allSettled([
     getStatus(NETWORK),
     getPoktPrice(),
@@ -43,7 +49,7 @@ export async function GET() {
   }
   const rolling = rollingRes.status === 'fulfilled' ? rollingRes.value : null;
 
-  const payload: LivePayload = {
+  return {
     block,
     healthy,
     lag,
@@ -52,5 +58,9 @@ export async function GET() {
     cu24h: rolling?.cu24h ?? null,
     netInflation: inflationRes.status === 'fulfilled' ? inflationRes.value : null,
   };
+}
+
+export async function GET() {
+  const payload = await unstable_cache(buildLive, ['live'], { revalidate: LIVE_TTL })();
   return NextResponse.json(payload);
 }

@@ -39,11 +39,13 @@ export function isRangeKey(v: string | null | undefined): v is RangeKey {
   return v != null && (RANGE_KEYS as string[]).includes(v);
 }
 
-/** Ranges the cron warmer proactively keeps hot (the common selections). Other ranges rely on TTL. */
-export const WARM_RANGES: RangeKey[] = ['7d', '30d'];
+/** Ranges the cron warmer proactively keeps hot. All ranges are warmed so a range toggle never
+ *  lands on a cold `unstable_cache` miss (the ~4s indexer path) — cheap at one 10-min cron on Pro,
+ *  and it complements the client-side sibling prefetch in `lib/use-tab-data.ts`. */
+export const WARM_RANGES: RangeKey[] = [...RANGE_KEYS];
 
-/** Cache tag for entries the warmer refreshes — only the warmed ranges get tagged so a
- *  revalidate doesn't cold-bust the less-common ranges it won't repopulate. */
+/** Cache tag for entries the warmer refreshes. Every warmed range is tagged so an on-demand
+ *  `revalidateTag('analytics')` busts them all and the next cron run repopulates. */
 export function warmTag(range: RangeKey): string[] {
   return WARM_RANGES.includes(range) ? ['analytics'] : [];
 }

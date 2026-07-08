@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { IconActivity, IconCoin, IconAffiliate, IconServer2, IconStack2 } from '@tabler/icons-react';
+import { IconActivity, IconCoin, IconAffiliate, IconServer2, IconStack2, IconLoader2 } from '@tabler/icons-react';
+import { useIsFetching } from '@/lib/loading-store';
 import { RangePills } from './RangePills';
 import { Tabbar, type TabDef } from './Tabbar';
 import { DEFAULT_RANGE, type RangeKey } from '@/lib/app-config';
@@ -24,6 +25,7 @@ const TABS: (TabDef & { key: TabKey })[] = [
 export function Dashboard() {
   const [tab, setTab] = useState<TabKey>('traffic');
   const [range, setRange] = useState<RangeKey>(DEFAULT_RANGE);
+  const fetching = useIsFetching();
 
   return (
     <>
@@ -34,12 +36,26 @@ export function Dashboard() {
             Traffic, economics, and protocol health — sourced from data.pocket.network
           </p>
         </div>
-        <RangePills value={range} onChange={setRange} />
+        <div className="flex items-center gap-3">
+          <span
+            className={`flex items-center gap-1.5 text-[12.5px] font-medium text-text-secondary transition-opacity duration-200 ${
+              fetching ? 'opacity-100' : 'opacity-0'
+            }`}
+            aria-hidden={!fetching}
+          >
+            <IconLoader2 size={14} className="animate-spin" />
+            Updating…
+          </span>
+          <RangePills value={range} onChange={setRange} />
+        </div>
       </div>
 
       <Tabbar tabs={TABS} active={tab} onChange={(k) => setTab(k as TabKey)} />
 
-      <div className="mt-6">
+      <div
+        className={`mt-6 transition-opacity duration-200 ${fetching ? 'opacity-60' : 'opacity-100'}`}
+        aria-busy={fetching}
+      >
         {tab === 'traffic' && <TrafficTab range={range} />}
         {tab === 'network' && <NetworkTab range={range} />}
         {tab === 'suppliers' && <SuppliersTab range={range} />}

@@ -200,6 +200,50 @@
   }
 }
 
+/* ---- global top loading bar (driven by lib/loading-store) ---- */
+.topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2.5px;
+  z-index: 100;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  background: color-mix(in srgb, var(--blue) 14%, transparent);
+}
+.topbar.is-active {
+  opacity: 1;
+}
+.topbar-glint {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 38%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, transparent, var(--blue-soft), var(--blue), transparent);
+  animation: topbar-slide 1.05s ease-in-out infinite;
+}
+@keyframes topbar-slide {
+  0% {
+    left: -40%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .topbar-glint {
+    animation: none;
+    left: 0;
+    width: 100%;
+    background: var(--blue);
+    opacity: 0.5;
+  }
+}
+
 /* thin custom scrollbar for dropdown lists */
 .scroll-thin::-webkit-scrollbar {
   width: 8px;

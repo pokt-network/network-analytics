@@ -3,6 +3,7 @@ import { Rubik } from 'next/font/google';
 import './globals.css';
 import { ThemeScript } from '@/components/shell/ThemeScript';
 import { Atmosphere } from '@/components/shell/Atmosphere';
+import { TopProgressBar } from '@/components/shell/TopProgressBar';
 import { AppBar } from '@/components/shell/AppBar';
 import { LiveStrip } from '@/components/shell/LiveStrip';
 import { Footer } from '@/components/shell/Footer';
@@ -47,6 +48,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <ThemeScript />
       </head>
       <body>
+        <TopProgressBar />
         <Atmosphere />
         <NetworkProvider network={NETWORK}>
           <div className="shell">
