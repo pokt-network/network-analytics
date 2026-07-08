@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { IconActivity, IconCoin, IconAffiliate, IconServer2, IconStack2, IconLoader2 } from '@tabler/icons-react';
 import { useIsFetching } from '@/lib/loading-store';
 import { RangePills } from './RangePills';
@@ -11,6 +11,7 @@ import { NetworkTab } from '@/components/tabs/NetworkTab';
 import { SuppliersTab } from '@/components/tabs/SuppliersTab';
 import { EconomyTab } from '@/components/tabs/EconomyTab';
 import { ServicesTab } from '@/components/tabs/ServicesTab';
+import type { ServiceItem } from '@/components/tabs/ServicePicker';
 
 type TabKey = 'traffic' | 'economy' | 'network' | 'suppliers' | 'services';
 
@@ -22,10 +23,45 @@ const TABS: (TabDef & { key: TabKey })[] = [
   { key: 'services', label: 'Services', icon: <IconStack2 size={17} /> },
 ];
 
-export function Dashboard() {
-  const [tab, setTab] = useState<TabKey>('traffic');
+const TAB_KEYS = TABS.map((t) => t.key);
+function isTabKey(v: string | null | undefined): v is TabKey {
+  return v != null && (TAB_KEYS as string[]).includes(v);
+}
+
+export function Dashboard({ initialTab }: { initialTab?: string }) {
+  // The active tab is reflected in the URL (`?tab=`) so tabs are deep-linkable. `initialTab` comes
+  // from the server (page reads the query), so a deep link renders the right tab with no flash.
+  const [tab, setTabState] = useState<TabKey>(isTabKey(initialTab) ? initialTab : 'traffic');
+
+  // Keep in sync with browser back/forward (which change the URL without remounting).
+  useEffect(() => {
+    const sync = () => {
+      const t = new URLSearchParams(window.location.search).get('tab');
+      setTabState(isTabKey(t) ? t : 'traffic');
+    };
+    window.addEventListener('popstate', sync);
+    return () => window.removeEventListener('popstate', sync);
+  }, []);
+
+  const setTab = (k: TabKey) => {
+    if (k === tab) return;
+    setTabState(k);
+    const params = new URLSearchParams(window.location.search);
+    params.set('tab', k);
+    // pushState (not replace) so back/forward navigate tab history; query-only, no server round-trip.
+    window.history.pushState(null, '', `${window.location.pathname}?${params.toString()}`);
+  };
+
   const [range, setRange] = useState<RangeKey>(DEFAULT_RANGE);
+  // Selected service is shared so links elsewhere (e.g. the Traffic performance table) can open the
+  // Services tab focused on a specific service.
+  const [svc, setSvc] = useState<ServiceItem | null>(null);
   const fetching = useIsFetching();
+
+  const openService = (item: ServiceItem) => {
+    setSvc(item);
+    setTab('services');
+  };
 
   return (
     <>
@@ -56,11 +92,11 @@ export function Dashboard() {
         className={`mt-6 transition-opacity duration-200 ${fetching ? 'opacity-60' : 'opacity-100'}`}
         aria-busy={fetching}
       >
-        {tab === 'traffic' && <TrafficTab range={range} />}
+        {tab === 'traffic' && <TrafficTab range={range} onOpenService={openService} />}
         {tab === 'network' && <NetworkTab range={range} />}
         {tab === 'suppliers' && <SuppliersTab range={range} />}
         {tab === 'economy' && <EconomyTab />}
-        {tab === 'services' && <ServicesTab range={range} />}
+        {tab === 'services' && <ServicesTab range={range} svc={svc} onSelectService={setSvc} />}
       </div>
     </>
   );

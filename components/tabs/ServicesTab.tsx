@@ -1,7 +1,6 @@
 'use client';
 
-import { useState } from 'react';
-import { IconSearch, IconCpu, IconBolt, IconServer2, IconCoin, IconChartLine, IconInfoCircle, IconList, IconArrowLeft } from '@tabler/icons-react';
+import { IconSearch, IconCpu, IconBolt, IconServer2, IconCoin, IconChartLine, IconInfoCircle, IconList, IconX } from '@tabler/icons-react';
 import { type RangeKey, RANGE_SPECS } from '@/lib/app-config';
 import { useTabData } from '@/lib/use-tab-data';
 import type { ServiceDetail } from '@/lib/data/services';
@@ -16,8 +15,16 @@ import { ServicePicker, type ServiceItem } from './ServicePicker';
 
 const LIST_PAGE_SIZE = 50;
 
-export function ServicesTab({ range }: { range: RangeKey }) {
-  const [svc, setSvc] = useState<ServiceItem | null>(null);
+// `svc` is owned by the Dashboard so other tabs can open a service here (see onOpenService).
+export function ServicesTab({
+  range,
+  svc,
+  onSelectService,
+}: {
+  range: RangeKey;
+  svc: ServiceItem | null;
+  onSelectService: (s: ServiceItem | null) => void;
+}) {
   // Top-level analytics table (range-aware suppliers + CU), and the full id/name list for the picker.
   const analytics = useTabData<{ services: ServiceAnalyticsRow[] }>(`/api/services/analytics?range=${range}`);
   const pickerList = useTabData<{ services: ServiceItem[] }>('/api/services/list');
@@ -39,22 +46,22 @@ export function ServicesTab({ range }: { range: RangeKey }) {
         <CardHeader
           title="Find a Service"
           icon={<IconSearch size={18} />}
-          right={
-            svc ? (
-              <button
-                type="button"
-                onClick={() => setSvc(null)}
-                className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[13px] font-medium text-text-secondary hover:border-line-hover hover:text-text-primary"
-              >
-                <IconArrowLeft size={14} />
-                All services
-              </button>
-            ) : (
-              <span className="text-[11px] text-text-secondary">{pickerList.data?.services.length || '100+'} services on network</span>
-            )
-          }
+          right={<span className="text-[11px] text-text-secondary">{pickerList.data?.services.length || '100+'} services on network</span>}
         />
-        <ServicePicker onSelect={setSvc} selectedLabel={svc ? `${svc.id} — ${svc.name}` : undefined} items={pickerList.data?.services ?? []} />
+        <div className="flex items-center gap-2.5">
+          <ServicePicker onSelect={onSelectService} selectedLabel={svc ? `${svc.id} — ${svc.name}` : undefined} items={pickerList.data?.services ?? []} />
+          {svc && (
+            <button
+              type="button"
+              onClick={() => onSelectService(null)}
+              className="flex h-11 shrink-0 items-center gap-1.5 rounded-[10px] border bg-bg-surface px-3.5 text-[13px] font-medium text-text-secondary hover:border-line-hover hover:text-text-primary"
+              title="Clear selection — back to all services"
+            >
+              <IconX size={15} />
+              Clear
+            </button>
+          )}
+        </div>
       </Card>
 
       {/* Default view: service analytics — suppliers + windowed CU, sortable. */}
@@ -76,7 +83,7 @@ export function ServicesTab({ range }: { range: RangeKey }) {
               initialSortDir="desc"
               pageSize={LIST_PAGE_SIZE}
               unit="services"
-              onRowClick={(r) => setSvc({ id: r.id, name: r.name })}
+              onRowClick={(r) => onSelectService({ id: r.id, name: r.name })}
             />
           )}
         </Card>

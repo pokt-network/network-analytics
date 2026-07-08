@@ -34,7 +34,7 @@ function changeSub(pct: number) {
   return `${arrow} ${Math.abs(pct).toFixed(1)}% vs prev`;
 }
 
-export function TrafficTab({ range }: { range: RangeKey }) {
+export function TrafficTab({ range, onOpenService }: { range: RangeKey; onOpenService: (s: { id: string; name: string }) => void }) {
   const { data, error } = useTabData<TrafficResponse>(`/api/traffic?range=${range}`);
   const [chartType, setChartType] = useState<ChartType>('line');
   // Network total is a standalone toggle (its own checkbox), independent of the service dropdown.
@@ -80,7 +80,16 @@ export function TrafficTab({ range }: { range: RangeKey }) {
       key: 'service',
       header: 'Service',
       sortValue: (r) => r.serviceId,
-      render: (r) => <span className="font-medium text-blue-soft">{r.serviceId}</span>,
+      render: (r) => (
+        <button
+          type="button"
+          onClick={() => onOpenService({ id: r.serviceId, name: r.serviceName })}
+          className="font-medium text-blue-soft hover:underline"
+          title={`View ${r.serviceId} details`}
+        >
+          {r.serviceId}
+        </button>
+      ),
     },
     { key: 'label', header: 'Label', sortValue: (r) => r.serviceName, render: (r) => r.serviceName || '—' },
     {
