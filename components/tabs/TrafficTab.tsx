@@ -18,6 +18,14 @@ import { ChartSkeleton, ErrorState } from '@/components/ui/states';
 
 const TOTAL_KEY = 'total';
 
+// Human "in the last …" phrase for the active-range window.
+const RANGE_DURATION: Record<RangeKey, string> = {
+  '24h': '24 hours',
+  '7d': '7 days',
+  '30d': '30 days',
+  '60d': '60 days',
+};
+
 function trendOf(pct: number): Trend {
   return pct > 0.05 ? 'up' : pct < -0.05 ? 'down' : 'flat';
 }
@@ -29,7 +37,9 @@ function changeSub(pct: number) {
 export function TrafficTab({ range }: { range: RangeKey }) {
   const { data, error } = useTabData<TrafficResponse>(`/api/traffic?range=${range}`);
   const [chartType, setChartType] = useState<ChartType>('line');
-  // User's series selection, scoped to the range it was made in (so a range switch falls back to
+  // Network total is a standalone toggle (its own checkbox), independent of the service dropdown.
+  const [showTotal, setShowTotal] = useState(true);
+  // User's service selection, scoped to the range it was made in (so a range switch falls back to
   // the fresh default without a state-syncing effect).
   const [selOverride, setSelOverride] = useState<{ range: RangeKey; set: Set<string> } | null>(null);
 
@@ -40,10 +50,10 @@ export function TrafficTab({ range }: { range: RangeKey }) {
     return m;
   }, [data]);
 
-  // Default selection: network total + top 5 services.
+  // Default selection: top 5 services (network total is controlled separately).
   const defaultSel = useMemo(() => {
     const top5 = data?.series.services.slice(0, 5).map((s) => s.id) ?? [];
-    return new Set<string>([TOTAL_KEY, ...top5]);
+    return new Set<string>(top5);
   }, [data]);
 
   if (error) return <ErrorState>Couldn’t load traffic data: {error}</ErrorState>;
@@ -52,15 +62,12 @@ export function TrafficTab({ range }: { range: RangeKey }) {
   const sel = selOverride && selOverride.range === range ? selOverride.set : defaultSel;
 
   const chartSeries: SeriesDef[] = [];
-  if (sel.has(TOTAL_KEY)) chartSeries.push({ key: TOTAL_KEY, color: NETWORK_TOTAL_COLOR, label: 'Network total' });
+  if (showTotal) chartSeries.push({ key: TOTAL_KEY, color: NETWORK_TOTAL_COLOR, label: 'Network total' });
   for (const s of data.series.services) {
     if (sel.has(s.id)) chartSeries.push({ key: s.id, color: colorFor.get(s.id)!, label: s.id });
   }
 
-  const msOptions: MultiOption[] = [
-    { id: TOTAL_KEY, label: 'Network total', color: NETWORK_TOTAL_COLOR },
-    ...data.series.services.map((s) => ({ id: s.id, label: s.id, color: colorFor.get(s.id)! })),
-  ];
+  const msOptions: MultiOption[] = data.series.services.map((s) => ({ id: s.id, label: s.id, color: colorFor.get(s.id)! }));
 
   const donutData: DonutDatum[] = data.donut.map((d) => ({
     name: d.name,
@@ -138,10 +145,10 @@ export function TrafficTab({ range }: { range: RangeKey }) {
           value={formatNumber(stats.activeServices)}
           icon={<IconStack2 size={15} />}
           iconColor="var(--mint)"
-          sub={`of ${formatNumber(stats.totalServices)} total`}
+          sub={`of ${formatNumber(stats.totalServices)} total in the last ${RANGE_DURATION[range]}`}
         />
         <StatCard
-          label="Serving Suppliers"
+          label="Staked Suppliers"
           value={stats.servingSuppliers != null ? formatNumber(stats.servingSuppliers) : '—'}
           icon={<IconServer2 size={15} />}
           iconColor="var(--lavender)"
@@ -157,6 +164,15 @@ export function TrafficTab({ range }: { range: RangeKey }) {
           right={
             <div className="flex items-center gap-2.5">
               <CardTag>estimated CU</CardTag>
+              <label className="flex cursor-pointer items-center gap-1.5 text-[13px] text-text-secondary">
+                <input
+                  type="checkbox"
+                  checked={showTotal}
+                  onChange={() => setShowTotal((v) => !v)}
+                  style={{ accentColor: NETWORK_TOTAL_COLOR }}
+                />
+                Show network total
+              </label>
               <ChartTypeToggle value={chartType} onChange={setChartType} options={['line', 'bar']} />
               <MultiSelect
                 options={msOptions}
@@ -167,6 +183,15 @@ export function TrafficTab({ range }: { range: RangeKey }) {
                   else next.add(id);
                   setSelOverride({ range, set: next });
                 }}
+                onSelectAll={(ids, select) => {
+                  const next = new Set(sel);
+                  for (const id of ids) {
+                    if (select) next.add(id);
+                    else next.delete(id);
+                  }
+                  setSelOverride({ range, set: next });
+                }}
+                selectAllLabel="All"
                 buttonLabel={`Services (${sel.size})`}
               />
             </div>

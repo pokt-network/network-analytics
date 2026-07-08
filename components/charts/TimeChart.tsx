@@ -1,8 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { ComposedChart, Line, Area, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { fmtNum, fmtDateTick } from '@/lib/chart-format';
+import { ComposedChart, Line, Area, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { fmtNum, fmtDateTick, fmtDateFull } from '@/lib/chart-format';
 import { SeriesTooltip } from './SeriesTooltip';
 
 export type ChartType = 'line' | 'area' | 'bar';
@@ -13,8 +13,10 @@ export interface SeriesDef {
   label: string;
 }
 
+type Row = Record<string, number | string | null>;
+
 interface Props {
-  data: Array<Record<string, number | string | null>>;
+  data: Row[];
   series: SeriesDef[];
   interval: 'hour' | 'day' | 'week';
   type: ChartType;
@@ -31,28 +33,73 @@ const AXIS = 'var(--text-secondary)';
 const GRID = 'var(--border)';
 const BUCKET_MS: Record<'hour' | 'day' | 'week', number> = { hour: 3_600_000, day: 86_400_000, week: 604_800_000 };
 
-// Scale the trailing partial bucket up to a full-period estimate (PoktScan's end-of-day projection):
-// the current bucket only covers `elapsed` of its period, so `actual / elapsed` estimates its total.
-function project(
-  data: Props['data'],
-  series: SeriesDef[],
-  interval: 'hour' | 'day' | 'week',
-  xKey: string,
-  nowMs: number,
-): { data: Props['data']; on: boolean } {
-  if (data.length < 2) return { data, on: false };
-  const n = data.length;
-  const start = Date.parse(String(data[n - 1][xKey]));
-  if (!Number.isFinite(start)) return { data, on: false };
+// End-of-period projection (PoktScan-style): the current bucket only covers `elapsed` of its period,
+// so `actual / elapsed` estimates its full-period total. `elapsed` is the fraction of the current
+// bucket that has passed; `false` means it's essentially complete (nothing to project).
+function elapsedFrac(data: Row[], interval: 'hour' | 'day' | 'week', xKey: string, nowMs: number): number | false {
+  if (data.length < 2) return false;
+  const start = Date.parse(String(data[data.length - 1][xKey]));
+  if (!Number.isFinite(start)) return false;
   const elapsed = Math.min(1, Math.max(0.02, (nowMs - start) / BUCKET_MS[interval]));
-  if (elapsed >= 0.985) return { data, on: false }; // bucket essentially complete
+  return elapsed >= 0.985 ? false : elapsed;
+}
+
+// Bars: keep the current bucket's confirmed value as the solid base and stack a translucent
+// "remainder" (projected − confirmed) on top. Stays on the category axis.
+function projectBar(data: Row[], series: SeriesDef[], elapsed: number): Row[] {
   const out = data.map((r) => ({ ...r }));
+  const today = out[out.length - 1];
   for (const s of series) {
-    const actual = Number(out[n - 1][s.key] ?? 0);
-    out[n - 1][`${s.key}__proj`] = actual / elapsed;
-    out[n - 2][`${s.key}__proj`] = out[n - 2][s.key]; // anchor the dashed connector to the last full bucket
+    const actual = Number(today[s.key] ?? 0);
+    const projTotal = actual / elapsed;
+    today[`${s.key}__soFar`] = actual;
+    today[`${s.key}__projTotal`] = projTotal;
+    today[`${s.key}__projRem`] = Math.max(0, projTotal - actual);
   }
-  return { data: out, on: true };
+  return out;
+}
+
+// Line/area: the current (incomplete) day occupies the final segment. Rather than plotting the raw
+// confirmed-so-far value — a partial cumulative that dips below the full days and then spikes up to
+// the projection — the line traces one smooth trajectory from the last complete day up to the
+// projected full-day total. The solid/dashed split marks elapsed-vs-remaining time along that same
+// trajectory (so the hard line flows naturally into the projection instead of kinking). The exact
+// confirmed-so-far and projected totals still surface in the tooltip. A numeric time axis lets the
+// split sit off-tick at the elapsed position; the projected total lands on the current-day tick.
+function projectLine(
+  data: Row[],
+  series: SeriesDef[],
+  xKey: string,
+  elapsed: number,
+): { data: Row[]; ticks: number[] } {
+  const rows: Row[] = data.map((r) => ({ ...r, __t: Date.parse(String(r[xKey])) }));
+  const ticks = rows.map((r) => Number(r.__t)); // day-boundary ticks, incl. the current day
+  const n = rows.length;
+  const last = rows[n - 1];
+  const lastT = Number(last.__t);
+  const prevT = Number(rows[n - 2].__t);
+  const splitT = prevT + elapsed * (lastT - prevT); // where confirmed time ends within the final segment
+  const dayLabel = fmtDateFull(new Date(lastT).toISOString()); // both current-day points read as the current day
+
+  const split: Row = { __t: splitT, __label: dayLabel };
+  const projected: Row = { __t: lastT, __label: dayLabel };
+  for (const s of series) {
+    const actual = Number(last[s.key] ?? 0); // real confirmed-so-far (tooltip only)
+    const projTotal = actual / elapsed;
+    const prevVal = Number(rows[n - 2][s.key] ?? 0);
+    const splitVal = prevVal + elapsed * (projTotal - prevVal); // on the last-complete → projected line
+    // Split point: solid endpoint + dashed start, sitting on the smooth trajectory.
+    split[s.key] = splitVal;
+    split[`${s.key}__proj`] = splitVal;
+    split[`${s.key}__soFar`] = actual;
+    split[`${s.key}__projTotal`] = projTotal;
+    // Projected point (on the tick): no solid, dashed end.
+    projected[s.key] = null;
+    projected[`${s.key}__proj`] = projTotal;
+    projected[`${s.key}__soFar`] = actual;
+    projected[`${s.key}__projTotal`] = projTotal;
+  }
+  return { data: [...rows.slice(0, n - 1), split, projected], ticks };
 }
 
 export function TimeChart({ data, series, interval, type, height = 340, xKey = 'date', yFmt = fmtNum, projected = false, nowMs }: Props) {
@@ -60,19 +107,27 @@ export function TimeChart({ data, series, interval, type, height = 340, xKey = '
   // client-side after data loads, so there's no SSR/hydration concern).
   const [mountNow] = useState(() => Date.now());
   const now = nowMs ?? mountNow;
-  const { data: pdata, on } = projected ? project(data, series, interval, xKey, now) : { data, on: false };
-  const n = pdata.length;
+  const elapsed = projected ? elapsedFrac(data, interval, xKey, now) : false;
+  const on = elapsed !== false;
+  const isBar = type === 'bar';
+  // Numeric time axis only for the projected line/area case (so the confirmed point can sit off-tick);
+  // everything else keeps the simpler category axis.
+  const numeric = on && !isBar;
 
-  // Line/area: hide the partial actual so the solid line stops at the last full bucket (the dashed
-  // projection continues it). Bar: replace the last bar's value with the projection.
-  const renderData = !on
-    ? pdata
-    : pdata.map((r, i) => {
-        if (i !== n - 1) return r;
-        const patched = { ...r };
-        for (const s of series) patched[s.key] = type === 'bar' ? (r[`${s.key}__proj`] ?? null) : null;
-        return patched;
-      });
+  let renderData: Row[];
+  let ticks: number[] | undefined;
+  if (isBar) {
+    renderData = on ? projectBar(data, series, elapsed) : data;
+  } else if (numeric) {
+    const pl = projectLine(data, series, xKey, elapsed);
+    renderData = pl.data;
+    ticks = pl.ticks;
+  } else {
+    renderData = data;
+  }
+
+  const xAxisKey = numeric ? '__t' : xKey;
+  const labelFmt = numeric ? (v: string) => fmtDateFull(new Date(Number(v)).toISOString()) : fmtDateFull;
 
   return (
     <div style={{ height }} className="w-full">
@@ -90,34 +145,79 @@ export function TimeChart({ data, series, interval, type, height = 340, xKey = '
           )}
           <CartesianGrid stroke={GRID} vertical={false} />
           <XAxis
-            dataKey={xKey}
-            tickFormatter={(v) => fmtDateTick(String(v), interval)}
+            dataKey={xAxisKey}
+            type={numeric ? 'number' : 'category'}
+            domain={numeric && ticks ? [ticks[0], ticks[ticks.length - 1]] : undefined}
+            ticks={numeric ? ticks : undefined}
+            tickFormatter={(v) => fmtDateTick(numeric ? new Date(Number(v)).toISOString() : String(v), interval)}
             tick={{ fill: AXIS, fontSize: 11 }}
             stroke={GRID}
             minTickGap={type === 'bar' ? 16 : 24}
           />
           <YAxis tickFormatter={(v) => yFmt(Number(v))} tick={{ fill: AXIS, fontSize: 11 }} stroke={GRID} width={52} />
-          <Tooltip content={<SeriesTooltip yFmt={yFmt} />} cursor={type === 'bar' ? { fill: 'var(--bg-card-hover)' } : undefined} />
+          <Tooltip content={<SeriesTooltip yFmt={yFmt} labelFmt={labelFmt} />} cursor={type === 'bar' ? { fill: 'var(--bg-card-hover)' } : undefined} />
 
-          {series.map((s) => {
-            if (type === 'bar') {
-              return (
-                <Bar key={s.key} dataKey={s.key} name={s.label} fill={s.color} radius={[3, 3, 0, 0]} isAnimationActive={false}>
-                  {on && renderData.map((_, i) => <Cell key={i} fillOpacity={i === n - 1 ? 0.45 : 1} />)}
-                </Bar>
-              );
-            }
-            if (type === 'area') {
-              return (
-                <Area key={s.key} type="monotone" dataKey={s.key} name={s.label} stroke={s.color} strokeWidth={2} fill={`url(#tc-${s.key})`} dot={false} connectNulls isAnimationActive={false} />
-              );
-            }
-            return (
-              <Line key={s.key} type="monotone" dataKey={s.key} name={s.label} stroke={s.color} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
-            );
-          })}
+          {/* Confirmed series. Bars additionally stack a translucent "remainder" for the current
+              bucket; line/area continue with a dashed projection segment (rendered below). */}
+          {type === 'bar'
+            ? series.flatMap((s) => {
+                const bars = [
+                  <Bar
+                    key={s.key}
+                    dataKey={s.key}
+                    name={s.label}
+                    fill={s.color}
+                    stackId={on ? s.key : undefined}
+                    radius={[3, 3, 0, 0]}
+                    isAnimationActive={false}
+                  />,
+                ];
+                if (on) {
+                  bars.push(
+                    <Bar
+                      key={`${s.key}__projRem`}
+                      dataKey={`${s.key}__projRem`}
+                      name={`${s.label} (projected)`}
+                      fill={s.color}
+                      fillOpacity={0.4}
+                      stackId={s.key}
+                      radius={[3, 3, 0, 0]}
+                      isAnimationActive={false}
+                    />,
+                  );
+                }
+                return bars;
+              })
+            : series.map((s) =>
+                type === 'area' ? (
+                  <Area
+                    key={s.key}
+                    type="monotone"
+                    dataKey={s.key}
+                    name={s.label}
+                    stroke={s.color}
+                    strokeWidth={2}
+                    fill={`url(#tc-${s.key})`}
+                    dot={false}
+                    connectNulls
+                    isAnimationActive={false}
+                  />
+                ) : (
+                  <Line
+                    key={s.key}
+                    type="monotone"
+                    dataKey={s.key}
+                    name={s.label}
+                    stroke={s.color}
+                    strokeWidth={2}
+                    dot={false}
+                    connectNulls
+                    isAnimationActive={false}
+                  />
+                ),
+              )}
 
-          {/* Dashed projection for line/area modes. */}
+          {/* Dashed projection tail for line/area: confirmed value → projected full-period total. */}
           {on &&
             type !== 'bar' &&
             series.map((s) => (

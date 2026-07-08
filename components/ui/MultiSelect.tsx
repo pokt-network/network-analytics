@@ -14,11 +14,16 @@ export function MultiSelect({
   options,
   selected,
   onToggle,
+  onSelectAll,
+  selectAllLabel,
   buttonLabel,
 }: {
   options: MultiOption[];
   selected: Set<string>;
   onToggle: (id: string) => void;
+  /** When provided, renders a top "select all" row that bulk-toggles the currently shown options. */
+  onSelectAll?: (ids: string[], select: boolean) => void;
+  selectAllLabel?: string;
   buttonLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -36,6 +41,10 @@ export function MultiSelect({
 
   const q = query.trim().toLowerCase();
   const shown = q ? options.filter((o) => o.label.toLowerCase().includes(q) || o.id.toLowerCase().includes(q)) : options;
+
+  const shownIds = shown.map((o) => o.id);
+  const allShownSelected = shown.length > 0 && shownIds.every((id) => selected.has(id));
+  const someShownSelected = shownIds.some((id) => selected.has(id));
 
   return (
     <div ref={ref} className="relative">
@@ -57,6 +66,20 @@ export function MultiSelect({
             className="mb-1.5 h-[34px] w-full rounded-md border bg-bg-surface px-2.5 text-[13px] text-text-primary outline-none focus:border-blue"
           />
           <div className="scroll-thin max-h-[230px] overflow-y-auto">
+            {onSelectAll && shown.length > 0 && (
+              <label className="mb-1 flex cursor-pointer items-center gap-2.5 rounded-md border-b border-line px-2 py-[7px] text-[13px] font-medium hover:bg-bg-card-hover">
+                <input
+                  type="checkbox"
+                  checked={allShownSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someShownSelected && !allShownSelected;
+                  }}
+                  onChange={() => onSelectAll(shownIds, !allShownSelected)}
+                  style={{ accentColor: 'var(--blue)' }}
+                />
+                <span>{selectAllLabel ?? 'All'}</span>
+              </label>
+            )}
             {shown.map((o) => (
               <label
                 key={o.id}
