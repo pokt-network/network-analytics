@@ -85,7 +85,7 @@ export function LiveStrip() {
         <Item label="24h Relays" value={data?.relays24h != null ? formatCompact(data.relays24h) : '—'} />
         <Item label="24h CU" value={data?.cu24h != null ? formatCompact(data.cu24h) : '—'} />
         <span className="text-text-secondary">
-          Net Inflation
+          Supply Change
           <b
             className={`ml-1.5 font-medium ${
               data?.netInflation == null ? 'text-text-primary' : data.netInflation <= 0 ? 'text-mint' : 'text-coral'
