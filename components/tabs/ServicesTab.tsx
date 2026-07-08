@@ -33,6 +33,15 @@ export function ServicesTab({
 
   const rows = analytics.data?.services ?? [];
 
+  // Resolve a display label for the picker. A deep-linked service arrives with only its id, so look
+  // up the real name from the loaded list; fall back to the id alone until (or unless) it's known.
+  const svcLabel = svc
+    ? (() => {
+        const name = pickerList.data?.services.find((s) => s.id === svc.id)?.name || (svc.name !== svc.id ? svc.name : '');
+        return name ? `${svc.id} — ${name}` : svc.id;
+      })()
+    : undefined;
+
   const columns: Column<ServiceAnalyticsRow>[] = [
     { key: 'service', header: 'Service', sortValue: (r) => r.id, render: (r) => <span className="font-medium text-blue-soft">{r.id}</span> },
     { key: 'name', header: 'Name', sortValue: (r) => r.name, render: (r) => r.name || '—' },
@@ -49,7 +58,7 @@ export function ServicesTab({
           right={<span className="text-[11px] text-text-secondary">{pickerList.data?.services.length || '100+'} services on network</span>}
         />
         <div className="flex items-center gap-2.5">
-          <ServicePicker onSelect={onSelectService} selectedLabel={svc ? `${svc.id} — ${svc.name}` : undefined} items={pickerList.data?.services ?? []} />
+          <ServicePicker onSelect={onSelectService} selectedLabel={svcLabel} items={pickerList.data?.services ?? []} />
           {svc && (
             <button
               type="button"

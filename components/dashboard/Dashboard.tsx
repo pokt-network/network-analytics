@@ -5,7 +5,7 @@ import { IconActivity, IconCoin, IconAffiliate, IconServer2, IconStack2, IconLoa
 import { useIsFetching } from '@/lib/loading-store';
 import { RangePills } from './RangePills';
 import { Tabbar, type TabDef } from './Tabbar';
-import { DEFAULT_RANGE, type RangeKey } from '@/lib/app-config';
+import { DEFAULT_RANGE, isRangeKey, type RangeKey } from '@/lib/app-config';
 import { TrafficTab } from '@/components/tabs/TrafficTab';
 import { NetworkTab } from '@/components/tabs/NetworkTab';
 import { SuppliersTab } from '@/components/tabs/SuppliersTab';
@@ -28,16 +28,41 @@ function isTabKey(v: string | null | undefined): v is TabKey {
   return v != null && (TAB_KEYS as string[]).includes(v);
 }
 
-export function Dashboard({ initialTab }: { initialTab?: string }) {
-  // The active tab is reflected in the URL (`?tab=`) so tabs are deep-linkable. `initialTab` comes
-  // from the server (page reads the query), so a deep link renders the right tab with no flash.
+export function Dashboard({ initialTab, initialRange, initialService }: { initialTab?: string; initialRange?: string; initialService?: string }) {
+  // tab / range / service live in the URL so the dashboard is deep-linkable. The initial values come
+  // from the server (page reads the query), so a deep link renders correctly with no flash.
   const [tab, setTabState] = useState<TabKey>(isTabKey(initialTab) ? initialTab : 'traffic');
+  const [range, setRangeState] = useState<RangeKey>(isRangeKey(initialRange) ? initialRange : DEFAULT_RANGE);
+  // Service is shared so links elsewhere (e.g. the Traffic performance table) can open a service. A
+  // deep link only carries the id; the name is resolved for display from the services list.
+  const [svc, setSvcState] = useState<ServiceItem | null>(initialService ? { id: initialService, name: initialService } : null);
+  const fetching = useIsFetching();
 
-  // Keep in sync with browser back/forward (which change the URL without remounting).
+  // Write the given (partial) state to the URL. `range` defaults are omitted to keep links clean;
+  // range uses replaceState (a filter, not navigation) while tab/service push a history entry.
+  const writeUrl = (next: { tab?: TabKey; range?: RangeKey; svc?: ServiceItem | null }, replace = false) => {
+    const t = next.tab ?? tab;
+    const r = next.range ?? range;
+    const s = next.svc !== undefined ? next.svc : svc;
+    const params = new URLSearchParams(window.location.search);
+    params.set('tab', t);
+    if (r === DEFAULT_RANGE) params.delete('range');
+    else params.set('range', r);
+    if (s) params.set('service', s.id);
+    else params.delete('service');
+    const url = `${window.location.pathname}?${params.toString()}`;
+    if (replace) window.history.replaceState(null, '', url);
+    else window.history.pushState(null, '', url);
+  };
+
+  // Keep state in sync with browser back/forward (which change the URL without remounting).
   useEffect(() => {
     const sync = () => {
-      const t = new URLSearchParams(window.location.search).get('tab');
-      setTabState(isTabKey(t) ? t : 'traffic');
+      const p = new URLSearchParams(window.location.search);
+      setTabState(isTabKey(p.get('tab')) ? (p.get('tab') as TabKey) : 'traffic');
+      setRangeState(isRangeKey(p.get('range')) ? (p.get('range') as RangeKey) : DEFAULT_RANGE);
+      const s = p.get('service');
+      setSvcState(s ? { id: s, name: s } : null);
     };
     window.addEventListener('popstate', sync);
     return () => window.removeEventListener('popstate', sync);
@@ -46,21 +71,21 @@ export function Dashboard({ initialTab }: { initialTab?: string }) {
   const setTab = (k: TabKey) => {
     if (k === tab) return;
     setTabState(k);
-    const params = new URLSearchParams(window.location.search);
-    params.set('tab', k);
-    // pushState (not replace) so back/forward navigate tab history; query-only, no server round-trip.
-    window.history.pushState(null, '', `${window.location.pathname}?${params.toString()}`);
+    writeUrl({ tab: k });
   };
-
-  const [range, setRange] = useState<RangeKey>(DEFAULT_RANGE);
-  // Selected service is shared so links elsewhere (e.g. the Traffic performance table) can open the
-  // Services tab focused on a specific service.
-  const [svc, setSvc] = useState<ServiceItem | null>(null);
-  const fetching = useIsFetching();
-
+  const setRange = (r: RangeKey) => {
+    if (r === range) return;
+    setRangeState(r);
+    writeUrl({ range: r }, true);
+  };
+  const setSvc = (s: ServiceItem | null) => {
+    setSvcState(s);
+    writeUrl({ svc: s });
+  };
   const openService = (item: ServiceItem) => {
-    setSvc(item);
-    setTab('services');
+    setSvcState(item);
+    setTabState('services');
+    writeUrl({ tab: 'services', svc: item });
   };
 
   return (
