@@ -37,17 +37,29 @@ const BUCKET_MS: Record<'hour' | 'day' | 'week', number> = { hour: 3_600_000, da
 // so `actual / elapsed` estimates its full-period total. `elapsed` is the fraction of the current
 // bucket that has passed; `false` means "don't project".
 //
-// Only DAILY (and weekly) buckets are projected. A single partial hour is not: CU settles in bursts
-// (claims/proofs land in batches, not smoothly), so a big early-hour settlement makes `soFar` already
-// near a full hour's worth minutes in — extrapolating that by `soFar / elapsed` explodes into a
-// meaningless spike. Over a day those bursts average out, so `soFar / elapsed` is stable. We also
-// skip a barely-started bucket, where any extrapolation is unreliable, and a near-complete one.
-function elapsedFrac(data: Row[], interval: 'hour' | 'day' | 'week', xKey: string, nowMs: number): number | false {
-  if (interval === 'hour' || data.length < 2) return false;
+interface BucketState {
+  elapsed: number;
+  /** Project this bucket (daily/weekly, meaningfully underway but not complete). */
+  project: boolean;
+  /** Bucket is barely started — drop it so its ~0 value doesn't crash the line to the floor. */
+  drop: boolean;
+}
+
+// Decides how to treat the trailing (current) bucket:
+//  • DROP if barely started (< 10% elapsed) — e.g. the first UTC hours of a new day. Its value is
+//    ~0, so plotting it raw crashes the line; projecting it (soFar / tiny elapsed) explodes. Just end
+//    the chart at the last complete bucket instead.
+//  • PROJECT if a daily/weekly bucket is meaningfully underway (10–98.5%). A single partial hour is
+//    never projected — CU settles in bursts, so soFar/elapsed is unstable at hourly granularity.
+//  • otherwise show as-is (a complete bucket, or an hourly bucket past its first sliver).
+function currentBucket(data: Row[], interval: 'hour' | 'day' | 'week', xKey: string, nowMs: number): BucketState | null {
+  if (data.length < 2) return null;
   const start = Date.parse(String(data[data.length - 1][xKey]));
-  if (!Number.isFinite(start)) return false;
+  if (!Number.isFinite(start)) return null;
   const elapsed = (nowMs - start) / BUCKET_MS[interval];
-  return elapsed < 0.1 || elapsed >= 0.985 ? false : elapsed;
+  const drop = elapsed < 0.1;
+  const project = !drop && elapsed < 0.985 && interval !== 'hour';
+  return { elapsed, project, drop };
 }
 
 // Bars: keep the current bucket's confirmed value as the solid base and stack a translucent
@@ -113,23 +125,25 @@ export function TimeChart({ data, series, interval, type, height = 340, xKey = '
   // client-side after data loads, so there's no SSR/hydration concern).
   const [mountNow] = useState(() => Date.now());
   const now = nowMs ?? mountNow;
-  const elapsed = projected ? elapsedFrac(data, interval, xKey, now) : false;
-  const on = elapsed !== false;
+  const bucket = projected ? currentBucket(data, interval, xKey, now) : null;
+  const on = bucket?.project ?? false;
   const isBar = type === 'bar';
   // Numeric time axis only for the projected line/area case (so the confirmed point can sit off-tick);
   // everything else keeps the simpler category axis.
   const numeric = on && !isBar;
+  // Drop a barely-started trailing bucket (unless we're projecting it) so its ~0 value isn't plotted.
+  const baseData = bucket?.drop ? data.slice(0, -1) : data;
 
   let renderData: Row[];
   let ticks: number[] | undefined;
   if (isBar) {
-    renderData = on ? projectBar(data, series, elapsed) : data;
+    renderData = on ? projectBar(data, series, bucket!.elapsed) : baseData;
   } else if (numeric) {
-    const pl = projectLine(data, series, xKey, elapsed);
+    const pl = projectLine(data, series, xKey, bucket!.elapsed);
     renderData = pl.data;
     ticks = pl.ticks;
   } else {
-    renderData = data;
+    renderData = baseData;
   }
 
   const xAxisKey = numeric ? '__t' : xKey;
