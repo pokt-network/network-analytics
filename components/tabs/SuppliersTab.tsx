@@ -8,11 +8,10 @@ import type { DomainRow } from '@/lib/data/suppliers';
 import { formatNumber, formatCompact } from '@/lib/format';
 import { StatCard, type Trend } from '@/components/ui/StatCard';
 import { Card, CardHeader } from '@/components/ui/Card';
-import { DualAxisChart } from '@/components/charts/DualAxisChart';
+import { AreaTimeChart } from '@/components/charts/AreaTimeChart';
 import { DonutChart, type DonutDatum } from '@/components/charts/DonutChart';
 import { DataTable, type Column } from '@/components/ui/DataTable';
 import { ChartSkeleton, ErrorState } from '@/components/ui/states';
-import { Legend } from './NetworkTab';
 
 export function SuppliersTab({ range }: { range: RangeKey }) {
   const { data, error } = useTabData<SuppliersResponse>(`/api/suppliers?range=${range}`);
@@ -29,6 +28,15 @@ export function SuppliersTab({ range }: { range: RangeKey }) {
   const growth = stats.supplierGrowthPct;
   const growthLabel = growth == null ? '—' : `${growth >= 0 ? '+' : ''}${growth.toFixed(1)}%`;
   const growthTrend: Trend = growth == null || growth === 0 ? 'flat' : growth > 0 ? 'up' : 'down';
+
+  // Fit the y-axis to the supplier range (+25% padding) so the trend reads as real movement instead
+  // of a flat line pinned near the top of a 0-based axis. Honest for a count metric where 0 is never
+  // approached; the padding keeps small changes from looking dramatic.
+  const supVals = data.evolution.map((e) => e.suppliers);
+  const supMin = supVals.length ? Math.min(...supVals) : 0;
+  const supMax = supVals.length ? Math.max(...supVals) : 0;
+  const supPad = Math.max(50, Math.round((supMax - supMin) * 0.25));
+  const supDomain: [number, number] = [Math.max(0, supMin - supPad), supMax + supPad];
 
   const donutData: DonutDatum[] = data.concentration.map((c, i) => ({
     name: c.domain,
@@ -60,19 +68,14 @@ export function SuppliersTab({ range }: { range: RangeKey }) {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.6fr_1fr]">
         <Card>
-          <CardHeader title="Supplier Base & Churn" icon={<IconChartBar size={18} />} tag={`${range}`} />
-          <Legend
-            items={[
-              { label: 'Suppliers', color: 'var(--blue)' },
-              { label: 'Unstaking', color: 'var(--coral)' },
-            ]}
-          />
-          <DualAxisChart
+          <CardHeader title="Supplier Base" icon={<IconChartBar size={18} />} tag={`${range} · staked suppliers`} />
+          <AreaTimeChart
             data={data.evolution as unknown as Array<Record<string, number | string>>}
-            left={{ key: 'suppliers', color: 'var(--blue)', label: 'Suppliers', fmt: (n) => formatNumber(Math.round(n)) }}
-            right={{ key: 'unstaking', color: 'var(--coral)', label: 'Unstaking', fmt: (n) => formatNumber(Math.round(n)) }}
+            series={[{ key: 'suppliers', color: 'var(--blue)', label: 'Suppliers' }]}
             interval={data.interval}
-            height={260}
+            height={360}
+            yFmt={(n) => formatNumber(Math.round(n))}
+            yDomain={supDomain}
           />
         </Card>
         <Card>

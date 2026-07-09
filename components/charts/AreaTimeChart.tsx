@@ -14,12 +14,15 @@ interface Props {
   yFmt?: (n: number) => string;
   /** Stack the series into bands that sum to a whole (e.g. staked + unstaked = total supply). */
   stacked?: boolean;
+  /** Explicit y-axis domain. Fit it to the data range so a small-percentage trend (e.g. supplier
+   *  count drifting a few %) reads as real movement instead of a near-flat line on a 0-based axis. */
+  yDomain?: [number | string, number | string];
 }
 
 const AXIS = 'var(--text-secondary)';
 const GRID = 'var(--border)';
 
-export function AreaTimeChart({ data, series, interval, height = 320, xKey = 'date', yFmt = fmtNum, stacked = false }: Props) {
+export function AreaTimeChart({ data, series, interval, height = 320, xKey = 'date', yFmt = fmtNum, stacked = false, yDomain }: Props) {
   // Stacked bands need a solid fill to read as distinct areas; a single area keeps the soft gradient.
   const [top, bottom] = stacked ? [0.55, 0.28] : [0.22, 0];
   return (
@@ -42,7 +45,7 @@ export function AreaTimeChart({ data, series, interval, height = 320, xKey = 'da
             stroke={GRID}
             minTickGap={24}
           />
-          <YAxis tickFormatter={(v) => yFmt(Number(v))} tick={{ fill: AXIS, fontSize: 11 }} stroke={GRID} width={52} />
+          <YAxis domain={yDomain} tickFormatter={(v) => yFmt(Number(v))} tick={{ fill: AXIS, fontSize: 11 }} stroke={GRID} width={52} />
           <Tooltip content={<SeriesTooltip yFmt={yFmt} />} />
           {series.map((s) => (
             <Area
