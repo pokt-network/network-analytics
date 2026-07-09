@@ -66,9 +66,9 @@ export function SupplyHistoryChart({ data, pins, height = 320 }: Props) {
               <ReferenceLine
                 key={p.date + p.label}
                 x={x}
-                stroke="var(--gold)"
+                stroke="var(--pin)"
                 strokeDasharray="4 3"
-                label={{ value: p.label, position: 'insideTopRight', fill: 'var(--gold)', fontSize: 10 }}
+                label={{ value: p.label, position: 'insideTopRight', fill: 'var(--pin)', fontSize: 10 }}
               />
             );
           })}

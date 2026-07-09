@@ -21,6 +21,9 @@
   --border-hover: hsla(0, 0%, 96%, 0.15);
   --star-opacity: 1;
   --grid-dot: hsla(0, 0%, 96%, 0.03);
+  /* Event-pin accent. Light amber reads well on the dark canvas; the light theme overrides it with a
+     darker amber for contrast on white (var(--gold) is too pale on a light background). */
+  --pin: #ffc547;
 }
 [data-theme='light'] {
   --bg-primary: #f6f6f6;
@@ -34,6 +37,7 @@
   --border-hover: rgba(23, 28, 31, 0.2);
   --star-opacity: 0;
   --grid-dot: rgba(23, 28, 31, 0.035);
+  --pin: #b45309; /* amber-700 — dark enough to read clearly on white */
 }
 /* brand constants (theme-independent) */
 :root {

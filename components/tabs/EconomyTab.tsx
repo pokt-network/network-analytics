@@ -72,7 +72,12 @@ export function EconomyTab({ range }: { range: RangeKey }) {
                 <span
                   key={p.date + p.label}
                   title={p.description}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-[rgba(255,197,71,.3)] bg-[rgba(255,197,71,.08)] px-2.5 py-[3px] text-[12px] text-gold"
+                  className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-[3px] text-[12px]"
+                  style={{
+                    color: 'var(--pin)',
+                    borderColor: 'color-mix(in srgb, var(--pin) 35%, transparent)',
+                    background: 'color-mix(in srgb, var(--pin) 10%, transparent)',
+                  }}
                 >
                   <IconPin size={13} />
                   {p.label}
