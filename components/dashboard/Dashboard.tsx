@@ -48,7 +48,10 @@ export function Dashboard({ initialTab, initialRange, initialService }: { initia
     params.set('tab', t);
     if (r === DEFAULT_RANGE) params.delete('range');
     else params.set('range', r);
-    if (s) params.set('service', s.id);
+    // `service` is only meaningful on the Services tab. Carrying it onto any other tab produces
+    // messy, misleading share links (e.g. an Economy URL with `&service=opbnb`), so scope it to the
+    // Services tab and drop it everywhere else. Other args (range, diag, …) are preserved untouched.
+    if (s && t === 'services') params.set('service', s.id);
     else params.delete('service');
     const url = `${window.location.pathname}?${params.toString()}`;
     if (replace) window.history.replaceState(null, '', url);
@@ -71,6 +74,9 @@ export function Dashboard({ initialTab, initialRange, initialService }: { initia
   const setTab = (k: TabKey) => {
     if (k === tab) return;
     setTabState(k);
+    // Leaving Services clears the selected service so it doesn't linger in state or reappear in the
+    // URL on return; writeUrl already omits `service` for non-Services tabs.
+    if (k !== 'services') setSvcState(null);
     writeUrl({ tab: k });
   };
   const setRange = (r: RangeKey) => {

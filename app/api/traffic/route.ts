@@ -6,7 +6,7 @@ import { getLatestSnapshot } from '@/lib/data/snapshots';
 import { getServicesCount } from '@/lib/data/services-meta';
 import { rangeTTL } from '@/lib/timeranges';
 import { DEFAULT_RANGE, isRangeKey, warmTag, type RangeKey } from '@/lib/app-config';
-import { diagJson } from '@/lib/diagnostics';
+import { diagJson, stamped } from '@/lib/diagnostics';
 
 export interface TrafficStats {
   relays24h: number;
@@ -71,7 +71,7 @@ export async function GET(req: NextRequest) {
   const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
   // Cache the assembled payload so cold-after-warm loads don't re-hit the slow indexer resolvers.
   return diagJson('traffic', () =>
-    unstable_cache(() => buildTraffic(range), ['traffic', range], {
+    unstable_cache(stamped(() => buildTraffic(range)), ['traffic', range], {
       revalidate: rangeTTL(range),
       tags: warmTag(range),
     })(),

@@ -24,6 +24,7 @@ interface ReqRow {
   rttMs: number;
   bytes: number | null;
   oversize: boolean;
+  ageMs: number | null;
   status: number;
   ok: boolean;
 }
@@ -50,10 +51,16 @@ interface DiagEnv {
   };
 }
 
+interface ProbeSample {
+  cache: CacheState;
+  rttMs: number;
+  buildMs: number | null;
+  ageMs: number | null;
+}
 interface ProbeResult {
   label: string;
-  cold: { cache: CacheState; rttMs: number; buildMs: number | null };
-  warm: { cache: CacheState; rttMs: number; buildMs: number | null };
+  cold: ProbeSample;
+  warm: ProbeSample;
 }
 
 interface Snap {
@@ -133,23 +140,55 @@ function shouldTrack(url: string): boolean {
   return true;
 }
 
-// ── Enable gate ──────────────────────────────────────────────────────────────
-function diagEnabled(): boolean {
+// ── Enable gate — the URL's `diag` param is the single source of truth ─────────
+// No sessionStorage: clearing `?diag=1` from the URL must hide the panel immediately. The app
+// preserves the `diag` arg across its own tab/range navigation, so it stays visible while you browse
+// and disappears the moment the arg is removed.
+function urlHasDiag(): boolean {
   if (!isClient) return false;
   try {
-    const q = new URLSearchParams(window.location.search);
-    if (q.get('diag') === '1') {
-      sessionStorage.setItem('analytics-diag', '1');
-      return true;
-    }
-    if (q.get('diag') === '0') {
-      sessionStorage.removeItem('analytics-diag');
-      return false;
-    }
-    return sessionStorage.getItem('analytics-diag') === '1';
+    const v = new URLSearchParams(window.location.search).get('diag');
+    return v === '1' || v === 'true';
   } catch {
     return false;
   }
+}
+
+// The app navigates via history.pushState/replaceState (no framework event), so patch them to emit a
+// change event; combined with popstate this lets us react to every URL change.
+let historyPatched = false;
+function patchHistory() {
+  if (historyPatched || !isClient) return;
+  historyPatched = true;
+  for (const m of ['pushState', 'replaceState'] as const) {
+    const orig = history[m];
+    history[m] = function (this: History, ...args: Parameters<History['pushState']>) {
+      const r = orig.apply(this, args);
+      window.dispatchEvent(new Event('diag:locationchange'));
+      return r;
+    } as History[typeof m];
+  }
+}
+
+function subscribeUrl(cb: () => void): () => void {
+  patchHistory();
+  window.addEventListener('popstate', cb);
+  window.addEventListener('diag:locationchange', cb);
+  return () => {
+    window.removeEventListener('popstate', cb);
+    window.removeEventListener('diag:locationchange', cb);
+  };
+}
+
+/** Toggle `?diag=1` in the URL (Ctrl+Shift+D). All other args are preserved. */
+function toggleDiagInUrl() {
+  if (!isClient) return;
+  const p = new URLSearchParams(window.location.search);
+  if (p.get('diag') === '1' || p.get('diag') === 'true') p.delete('diag');
+  else p.set('diag', '1');
+  const q = p.toString();
+  history.replaceState(null, '', `${window.location.pathname}${q ? `?${q}` : ''}`);
+  window.dispatchEvent(new Event('diag:locationchange'));
 }
 
 // ── Capture install (idempotent, module-load) ────────────────────────────────
@@ -174,6 +213,7 @@ function recordRes(url: string, start: number, res: Response) {
     rttMs: round(performance.now() - start),
     bytes: numOrNull(res.headers.get('x-payload-bytes')),
     oversize: res.headers.get('x-cache-oversize') === '1',
+    ageMs: numOrNull(res.headers.get('x-cache-age-ms')),
     status: res.status,
     ok: res.ok,
   });
@@ -219,6 +259,7 @@ function install() {
         rttMs: round(performance.now() - start),
         bytes: null,
         oversize: false,
+        ageMs: null,
         status: 0,
         ok: false,
       });
@@ -255,7 +296,7 @@ function install() {
     .catch(() => {});
 }
 
-if (isClient && diagEnabled()) install();
+if (isClient && urlHasDiag()) install();
 
 // ── Actions ──────────────────────────────────────────────────────────────────
 const PROBE_ROUTES: Array<{ label: string; url: string }> = [
@@ -278,6 +319,7 @@ async function timedProbe(url: string, n: number) {
     cache: (res.headers.get('x-cache') as CacheState) ?? '—',
     rttMs: round(performance.now() - start),
     buildMs: numOrNull(res.headers.get('x-build-ms')),
+    ageMs: numOrNull(res.headers.get('x-cache-age-ms')),
   };
 }
 
@@ -322,6 +364,19 @@ function fmtBytes(n: number | null): string {
   if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(2)}MB`;
   if (n >= 1024) return `${(n / 1024).toFixed(0)}KB`;
   return `${n}B`;
+}
+/** Cache age (how long ago this key was built by the warmer or a user). */
+function fmtAge(ms: number | null): string {
+  if (ms == null) return '';
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  return `${Math.round(ms / 3_600_000)}h`;
+}
+// The cron warms every 10 min, so a healthy key is < ~11 min old. Older ⇒ the warmer isn't keeping up.
+const AGE_STALE_MS = 11 * 60_000;
+function ageColor(ms: number | null): string {
+  if (ms == null) return COLORS.dim;
+  return ms > AGE_STALE_MS ? COLORS.warn : COLORS.hit;
 }
 
 const COLORS = {
@@ -369,33 +424,21 @@ function Chip({ label, value, strong }: { label: string; value: string; strong?:
 }
 
 export function DiagnosticsOverlay() {
-  const [enabled, setEnabled] = useState(false);
   const [open, setOpen] = useState(true);
   const s = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  // Enabled tracks the URL's `diag` param reactively (useSyncExternalStore handles the SSR→client
+  // switch without a hydration mismatch). Clearing the arg hides the panel immediately.
+  const enabled = useSyncExternalStore(subscribeUrl, urlHasDiag, () => false);
 
   useEffect(() => {
-    // Enable *after* mount (not during render) so SSR and first client render both produce null and
-    // hydration matches; capture itself already started at module load. This one deliberate sync
-    // setState is the whole point of the effect — same idiom as lib/use-tab-data.ts.
-    if (diagEnabled()) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setEnabled(true);
-      install();
-    }
+    if (enabled) install();
+  }, [enabled]);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
         e.preventDefault();
-        setEnabled((prev) => {
-          const next = !prev;
-          try {
-            if (next) sessionStorage.setItem('analytics-diag', '1');
-            else sessionStorage.removeItem('analytics-diag');
-          } catch {
-            /* ignore */
-          }
-          if (next) install();
-          return next;
-        });
+        toggleDiagInUrl();
       }
     };
     window.addEventListener('keydown', onKey);
@@ -407,6 +450,8 @@ export function DiagnosticsOverlay() {
   const cold = s.rows.filter((r) => r.cache === 'MISS').length;
   const warm = s.rows.filter((r) => r.cache === 'HIT').length;
   const totalBytes = s.rows.reduce((a, r) => a + (r.bytes ?? 0), 0);
+  const ages = s.rows.map((r) => r.ageMs).filter((a): a is number => a != null);
+  const oldestAge = ages.length ? Math.max(...ages) : null;
   const idleTxt = s.marks.idle != null ? fmtMs(s.marks.idle) : s.inflight > 0 ? 'loading…' : '—';
 
   const mono = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' } as const;
@@ -483,6 +528,11 @@ export function DiagnosticsOverlay() {
               <b>{warm}</b> warm
             </span>
             <span style={{ color: COLORS.dim }}>{fmtBytes(totalBytes)} total</span>
+            {oldestAge != null && (
+              <span style={{ color: ageColor(oldestAge) }} title="oldest cache key seen — should stay under the 10-min warm cadence">
+                oldest <b>{fmtAge(oldestAge)}</b>
+              </span>
+            )}
           </div>
 
           {/* Live request table */}
@@ -499,6 +549,12 @@ export function DiagnosticsOverlay() {
                 <Badge cache={r.cache} />
                 <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.path}>
                   {r.label}
+                  {r.ageMs != null && (
+                    <span style={{ color: ageColor(r.ageMs) }} title="cache age — time since this key was last built">
+                      {' '}
+                      ·{fmtAge(r.ageMs)}
+                    </span>
+                  )}
                   {!r.ok && <span style={{ color: COLORS.miss }}> !{r.status}</span>}
                 </span>
                 <span style={{ color: COLORS.dim, width: 52, textAlign: 'right' }} title="server build time">
@@ -553,16 +609,19 @@ export function DiagnosticsOverlay() {
           {s.probes.length > 0 && (
             <div>
               <div style={{ color: COLORS.dim, fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>
-                Probe (fetch ×2 — expect MISS→HIT when cold)
+                Probe (fetch ×2 — expect MISS→HIT; age &lt; 10m ⇒ cron warming)
               </div>
               {s.probes.map((p) => (
                 <div key={p.label} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 0' }}>
-                  <span style={{ flex: 1 }}>{p.label}</span>
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.label}</span>
                   <Badge cache={p.cold.cache} />
-                  <span style={{ width: 48, textAlign: 'right', color: COLORS.dim }}>{fmtMs(p.cold.rttMs)}</span>
+                  <span style={{ width: 44, textAlign: 'right', color: COLORS.dim }}>{fmtMs(p.cold.rttMs)}</span>
                   <span style={{ color: COLORS.dim }}>→</span>
                   <Badge cache={p.warm.cache} />
-                  <span style={{ width: 48, textAlign: 'right', color: COLORS.dim }}>{fmtMs(p.warm.rttMs)}</span>
+                  <span style={{ width: 44, textAlign: 'right', color: COLORS.dim }}>{fmtMs(p.warm.rttMs)}</span>
+                  <span style={{ width: 40, textAlign: 'right', color: ageColor(p.warm.ageMs) }} title="cache age">
+                    {p.warm.ageMs != null ? fmtAge(p.warm.ageMs) : '—'}
+                  </span>
                 </div>
               ))}
             </div>
@@ -575,7 +634,7 @@ export function DiagnosticsOverlay() {
             </div>
           )}
 
-          <div style={{ color: COLORS.dim, fontSize: 9 }}>Ctrl+Shift+D to toggle · ?diag=1 to persist</div>
+          <div style={{ color: COLORS.dim, fontSize: 9 }}>Ctrl+Shift+D or ?diag=1 to toggle · clearing the arg hides this</div>
         </div>
       )}
     </div>

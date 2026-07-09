@@ -3,7 +3,7 @@ import { unstable_cache } from 'next/cache';
 import { getServiceDetail } from '@/lib/data/services';
 import { rangeTTL } from '@/lib/timeranges';
 import { DEFAULT_RANGE, isRangeKey, type RangeKey } from '@/lib/app-config';
-import { diagJson } from '@/lib/diagnostics';
+import { diagJson, stamped } from '@/lib/diagnostics';
 
 export async function GET(req: NextRequest) {
   const serviceId = req.nextUrl.searchParams.get('serviceId');
@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
   const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
 
   return diagJson('service', () =>
-    unstable_cache(() => getServiceDetail(serviceId, range), ['service', serviceId, range], {
+    unstable_cache(stamped(() => getServiceDetail(serviceId, range)), ['service', serviceId, range], {
       revalidate: rangeTTL(range),
     })(),
   );

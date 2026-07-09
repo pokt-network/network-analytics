@@ -5,7 +5,7 @@ import { getDomainTable, type DomainRow } from '@/lib/data/suppliers';
 import { rangeWindow, rangeTTL } from '@/lib/timeranges';
 import { DEFAULT_RANGE, isRangeKey, warmTag, type RangeKey } from '@/lib/app-config';
 import { UPOKT_PER_POKT } from '@/lib/config';
-import { diagJson } from '@/lib/diagnostics';
+import { diagJson, stamped } from '@/lib/diagnostics';
 
 export interface SupplierStats {
   totalSuppliers: number;
@@ -67,7 +67,7 @@ export async function GET(req: NextRequest) {
   const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
   // Suppliers change slowly and the per-domain stats are heavy → cache long, warmer keeps it fresh.
   return diagJson('suppliers', () =>
-    unstable_cache(() => buildSuppliers(range), ['suppliers', range], {
+    unstable_cache(stamped(() => buildSuppliers(range)), ['suppliers', range], {
       revalidate: rangeTTL(range),
       tags: warmTag(range),
     })(),

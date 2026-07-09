@@ -5,7 +5,7 @@ import { NETWORK } from '@/lib/app-config';
 import { getPoktPrice, type PoktPrice } from '@/lib/price';
 import { getRolling24hStats } from '@/lib/data/rewards';
 import { getNetInflationPctYr } from '@/lib/data/economy';
-import { diagJson } from '@/lib/diagnostics';
+import { diagJson, stamped } from '@/lib/diagnostics';
 
 // Live-strip heartbeat. Server-side so the browser never hits the indexer or CMC directly.
 // Polled by the LiveStrip client every 15s.
@@ -61,5 +61,5 @@ async function buildLive(): Promise<LivePayload> {
 }
 
 export async function GET() {
-  return diagJson('live', () => unstable_cache(buildLive, ['live'], { revalidate: LIVE_TTL })());
+  return diagJson('live', () => unstable_cache(stamped(buildLive), ['live'], { revalidate: LIVE_TTL })());
 }

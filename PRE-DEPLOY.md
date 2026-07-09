@@ -77,16 +77,22 @@ takes ~3.8s. Layers:
 ### Live diagnostics (`?diag=1`)
 
 Append **`?diag=1`** to any URL (or press **Ctrl+Shift+D**) to open the cache-diagnostics overlay.
-It's inert otherwise, so it's safe in production. As the page loads it shows, in real time:
+It's inert otherwise, so it's safe in production. The **URL `diag` param is the single source of
+truth** — the app preserves it across tab/range navigation, and *clearing it hides the panel* (no
+sticky sessionStorage). As the page loads it shows, in real time:
 - **HIT / MISS** per `/api/*` payload — a MISS is a cold indexer build (seconds); a HIT is served
   from `unstable_cache` (~ms). Classified server-side by build time and stamped on `x-cache` /
   `x-build-ms` / `x-payload-bytes` / `x-cache-oversize` headers (`lib/diagnostics.ts`).
+- **Cache age** per key (`·3m`), plus an `oldest Nm` summary — how long ago each key was last built.
+  `stamped()` records build time *inside* the cached value → `x-cache-age-ms`. **If every age stays
+  under ~10 min, the cron is warming on schedule;** a key drifting past 11 min (amber) means the
+  warmer isn't keeping it hot.
 - **Payload size** with a ⚠ when a single entry exceeds Vercel's **2 MB** Data-Cache limit (over
   which the entry is silently *never stored* → a permanent MISS no warmer can fix).
 - **Load clock** — FCP / LCP / DOMContentLoaded / load / **network-idle** (fully-rendered) marks.
 - **Warmer config** from `/api/diag` — flags the `$VERCEL_URL`-fallback footgun above.
 - **Probe caches ×2** re-fetches the heavy routes twice (browser-cache-busted, server-key stable) to
-  show the cold→warm transition; **Warm now** hits `/api/cron/warm`.
+  show the cold→warm transition and each key's age; **Warm now** hits `/api/cron/warm`.
 
 `rangeWindow()`/`fixedWindow()` quantize `now` to a 60s bucket (`WINDOW_BUCKET_MS`) so successive
 builds send the indexer identical timestamps — the inner `next:{revalidate}` fetch cache was

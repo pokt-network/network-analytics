@@ -6,7 +6,7 @@ import { getSupplyHistory } from '@/lib/data/economy';
 import { rangeWindow, rangeTTL } from '@/lib/timeranges';
 import { DEFAULT_RANGE, isRangeKey, warmTag, type RangeKey } from '@/lib/app-config';
 import { UPOKT_PER_POKT } from '@/lib/config';
-import { diagJson } from '@/lib/diagnostics';
+import { diagJson, stamped } from '@/lib/diagnostics';
 
 export interface NetworkStats {
   stakedValidators: number;
@@ -75,7 +75,7 @@ export async function GET(req: NextRequest) {
   const rangeParam = req.nextUrl.searchParams.get('range');
   const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
   return diagJson('network', () =>
-    unstable_cache(() => buildNetwork(range), ['network', range], {
+    unstable_cache(stamped(() => buildNetwork(range)), ['network', range], {
       revalidate: rangeTTL(range),
       tags: warmTag(range),
     })(),

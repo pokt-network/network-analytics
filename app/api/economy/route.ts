@@ -8,7 +8,7 @@ import {
   type CompSlice,
   type ProjectionPoint,
 } from '@/lib/data/economy';
-import { diagJson } from '@/lib/diagnostics';
+import { diagJson, stamped } from '@/lib/diagnostics';
 import { fixedWindow } from '@/lib/timeranges';
 import supplyEventsRaw from '@/data/supply-events.json';
 
@@ -67,6 +67,6 @@ async function buildEconomy(): Promise<EconomyResponse> {
 export async function GET() {
   // Economy is long-horizon and derived from several resolvers → cache long; warmer keeps it fresh.
   return diagJson('economy', () =>
-    unstable_cache(() => buildEconomy(), ['economy'], { revalidate: 1800, tags: ['analytics'] })(),
+    unstable_cache(stamped(() => buildEconomy()), ['economy'], { revalidate: 1800, tags: ['analytics'] })(),
   );
 }
