@@ -8,7 +8,7 @@ import type { ServiceAnalyticsRow } from '@/app/api/services/analytics/route';
 import { formatCompact, formatNumber } from '@/lib/format';
 import { StatCard } from '@/components/ui/StatCard';
 import { Card, CardHeader } from '@/components/ui/Card';
-import { TimeSeriesChart } from '@/components/charts/TimeSeriesChart';
+import { TimeChart } from '@/components/charts/TimeChart';
 import { DataTable, type Column } from '@/components/ui/DataTable';
 import { ChartSkeleton, ErrorState } from '@/components/ui/states';
 import { ServicePicker, type ServiceItem } from './ServicePicker';
@@ -110,19 +110,26 @@ export function ServicesTab({
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
             <StatCard label={`CU (${range})`} value={formatCompact(data.stats.cu)} icon={<IconCpu size={15} />} iconColor="var(--blue-soft)" sub="estimated" />
             <StatCard label={`Relays (${range})`} value={formatCompact(data.stats.relays)} icon={<IconBolt size={15} />} iconColor="var(--gold)" sub="estimated" />
-            <StatCard label="Suppliers Serving" value={formatCompact(data.stats.suppliers)} icon={<IconServer2 size={15} />} iconColor="var(--lavender)" />
-            <StatCard label="Gross Rewards" value={formatCompact(data.stats.grossRewardsPokt)} unit="POKT" icon={<IconCoin size={15} />} iconColor="var(--mint)" sub="claimed" />
+            <StatCard label="Suppliers Staked" value={formatCompact(data.stats.suppliers)} icon={<IconServer2 size={15} />} iconColor="var(--lavender)" />
+            <StatCard label={`Gross Rewards (${range})`} value={formatCompact(data.stats.grossRewardsPokt)} unit="POKT" icon={<IconCoin size={15} />} iconColor="var(--mint)" sub="claimed" />
           </div>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.6fr_1fr]">
             <Card>
               <CardHeader title={`${data.info.id} — Volume Trend`} icon={<IconChartLine size={18} />} tag={`${range} · estimated CU`} />
-              <TimeSeriesChart
+              <TimeChart
                 data={data.series as unknown as Array<Record<string, number | string>>}
                 series={[{ key: 'estimatedCU', color: 'var(--blue)', label: 'Estimated CU' }]}
                 interval={RANGE_SPECS[range].interval}
+                type="line"
+                projected
                 height={280}
               />
+              {RANGE_SPECS[range].interval !== 'hour' && (
+                <p className="mt-2 text-[11px] italic text-text-tertiary">
+                  Current {RANGE_SPECS[range].interval} is dashed — projected to its full-period estimate.
+                </p>
+              )}
             </Card>
             <Card>
               <CardHeader title="Service Info" icon={<IconInfoCircle size={18} />} />
@@ -132,6 +139,10 @@ export function ServicesTab({
                   <InfoRow k="Label" v={data.info.name} />
                   <InfoRow k="Apps staked" v={formatCompact(data.info.appsStaked)} />
                   <InfoRow k="Suppliers staked" v={formatCompact(data.info.suppliersStaked)} />
+                  <InfoRow
+                    k="CU per relay"
+                    v={formatNumber(Math.round(data.stats.relays > 0 ? data.stats.cu / data.stats.relays : 0))}
+                  />
                   <InfoRow k="Network share" v={`${data.info.sharePct.toFixed(1)}%`} />
                 </tbody>
               </table>
