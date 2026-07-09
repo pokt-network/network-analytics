@@ -10,21 +10,32 @@ export interface TimeWindow {
   interval: 'hour' | 'day' | 'week';
 }
 
+/** Window edges are quantized to this bucket so successive builds send the indexer *identical*
+ *  timestamps within the bucket. Raw `Date.now()` (ms resolution) gave every rebuild a unique
+ *  start/end, which defeated the inner `next:{revalidate}` fetch cache (keyed on request body) and
+ *  any indexer-side caching — making every cold build maximally expensive. 60s keeps the data
+ *  effectively live (analytics already tolerate minutes of staleness) while collapsing the key space. */
+export const WINDOW_BUCKET_MS = 60_000;
+
 export function rangeWindow(range: RangeKey, now: number = Date.now()): TimeWindow {
   const spec = RANGE_SPECS[range];
+  // Floor `now` to the bucket so `end` only advances once per bucket, not every millisecond.
+  const t = Math.floor(now / WINDOW_BUCKET_MS) * WINDOW_BUCKET_MS;
   return {
-    endISO: new Date(now).toISOString(),
-    startISO: new Date(now - spec.seconds * 1000).toISOString(),
-    prevStartISO: new Date(now - 2 * spec.seconds * 1000).toISOString(),
+    endISO: new Date(t).toISOString(),
+    startISO: new Date(t - spec.seconds * 1000).toISOString(),
+    prevStartISO: new Date(t - 2 * spec.seconds * 1000).toISOString(),
     interval: spec.interval,
   };
 }
 
-/** A fixed-length window ending now (e.g. trailing 3 days for 24h stat deltas). */
+/** A fixed-length window ending now (e.g. trailing 3 days for 24h stat deltas). Bucketed like
+ *  `rangeWindow` so repeated builds hit the same inner fetch/indexer cache entries. */
 export function fixedWindow(seconds: number, now: number = Date.now()) {
+  const t = Math.floor(now / WINDOW_BUCKET_MS) * WINDOW_BUCKET_MS;
   return {
-    startISO: new Date(now - seconds * 1000).toISOString(),
-    endISO: new Date(now).toISOString(),
+    startISO: new Date(t - seconds * 1000).toISOString(),
+    endISO: new Date(t).toISOString(),
   };
 }
 

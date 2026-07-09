@@ -1,8 +1,9 @@
-import { NextResponse, type NextRequest } from 'next/server';
+import { type NextRequest } from 'next/server';
 import { unstable_cache } from 'next/cache';
 import { getBurnMint, getMintRatio, type BurnMintPoint } from '@/lib/data/economy';
 import { rangeWindow, rangeTTL } from '@/lib/timeranges';
 import { DEFAULT_RANGE, isRangeKey, warmTag, type RangeKey } from '@/lib/app-config';
+import { diagJson } from '@/lib/diagnostics';
 
 // Burn vs Mint is the one Economy widget that IS windowed, so it follows the global range pills
 // (the rest — supply history, projection, composition, net inflation — are long-horizon and don't).
@@ -26,9 +27,10 @@ async function buildBurnMint(range: RangeKey): Promise<BurnMintResponse> {
 export async function GET(req: NextRequest) {
   const rangeParam = req.nextUrl.searchParams.get('range');
   const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
-  const payload = await unstable_cache(() => buildBurnMint(range), ['economy-burnmint', range], {
-    revalidate: rangeTTL(range),
-    tags: warmTag(range),
-  })();
-  return NextResponse.json(payload);
+  return diagJson('economy-burnmint', () =>
+    unstable_cache(() => buildBurnMint(range), ['economy-burnmint', range], {
+      revalidate: rangeTTL(range),
+      tags: warmTag(range),
+    })(),
+  );
 }

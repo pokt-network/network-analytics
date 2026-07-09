@@ -7,6 +7,7 @@ import { TopProgressBar } from '@/components/shell/TopProgressBar';
 import { AppBar } from '@/components/shell/AppBar';
 import { LiveStrip } from '@/components/shell/LiveStrip';
 import { Footer } from '@/components/shell/Footer';
+import { DiagnosticsOverlay } from '@/components/diag/DiagnosticsOverlay';
 import { NetworkProvider } from '@/lib/network-context';
 import { NETWORK } from '@/lib/app-config';
 
@@ -57,6 +58,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <main className="mx-auto w-full max-w-shell px-6 pb-16 pt-7">{children}</main>
             <Footer />
           </div>
+          <DiagnosticsOverlay />
         </NetworkProvider>
       </body>
     </html>

@@ -69,6 +69,28 @@ takes ~3.8s. Layers:
     the TTLs there (raise `rangeTTL` if needed).
   - Set **`CRON_SECRET`** in Vercel — the route rejects unauthorized calls when it's set, and Vercel
     Cron passes it automatically. Hit `/api/cron/warm` manually to test; it returns `{warmed,total}`.
+  - **Set `CRON_WARM_BASE_URL` to the public domain** (`https://analytics.pocket.network`). Left
+    unset, the warmer falls back to `$VERCEL_URL` — the *protected* deployment URL — so the cron
+    fetch is bounced by Deployment Protection (401) and warms **nothing**, leaving every visitor on
+    the cold ~4s path. This is the most common cause of "the cache never seems to work."
+
+### Live diagnostics (`?diag=1`)
+
+Append **`?diag=1`** to any URL (or press **Ctrl+Shift+D**) to open the cache-diagnostics overlay.
+It's inert otherwise, so it's safe in production. As the page loads it shows, in real time:
+- **HIT / MISS** per `/api/*` payload — a MISS is a cold indexer build (seconds); a HIT is served
+  from `unstable_cache` (~ms). Classified server-side by build time and stamped on `x-cache` /
+  `x-build-ms` / `x-payload-bytes` / `x-cache-oversize` headers (`lib/diagnostics.ts`).
+- **Payload size** with a ⚠ when a single entry exceeds Vercel's **2 MB** Data-Cache limit (over
+  which the entry is silently *never stored* → a permanent MISS no warmer can fix).
+- **Load clock** — FCP / LCP / DOMContentLoaded / load / **network-idle** (fully-rendered) marks.
+- **Warmer config** from `/api/diag` — flags the `$VERCEL_URL`-fallback footgun above.
+- **Probe caches ×2** re-fetches the heavy routes twice (browser-cache-busted, server-key stable) to
+  show the cold→warm transition; **Warm now** hits `/api/cron/warm`.
+
+`rangeWindow()`/`fixedWindow()` quantize `now` to a 60s bucket (`WINDOW_BUCKET_MS`) so successive
+builds send the indexer identical timestamps — the inner `next:{revalidate}` fetch cache was
+previously defeated by ms-resolution `Date.now()`.
 
 ## Trailing-bucket projection
 

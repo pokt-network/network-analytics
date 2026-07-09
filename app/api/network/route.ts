@@ -1,4 +1,4 @@
-import { NextResponse, type NextRequest } from 'next/server';
+import { type NextRequest } from 'next/server';
 import { unstable_cache } from 'next/cache';
 import { getSnapshots } from '@/lib/data/snapshots';
 import { getClaimProofs, type ClaimProofPoint } from '@/lib/data/claims';
@@ -6,6 +6,7 @@ import { getSupplyHistory } from '@/lib/data/economy';
 import { rangeWindow, rangeTTL } from '@/lib/timeranges';
 import { DEFAULT_RANGE, isRangeKey, warmTag, type RangeKey } from '@/lib/app-config';
 import { UPOKT_PER_POKT } from '@/lib/config';
+import { diagJson } from '@/lib/diagnostics';
 
 export interface NetworkStats {
   stakedValidators: number;
@@ -73,9 +74,10 @@ async function buildNetwork(range: RangeKey): Promise<NetworkResponse> {
 export async function GET(req: NextRequest) {
   const rangeParam = req.nextUrl.searchParams.get('range');
   const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
-  const payload = await unstable_cache(() => buildNetwork(range), ['network', range], {
-    revalidate: rangeTTL(range),
-    tags: warmTag(range),
-  })();
-  return NextResponse.json(payload);
+  return diagJson('network', () =>
+    unstable_cache(() => buildNetwork(range), ['network', range], {
+      revalidate: rangeTTL(range),
+      tags: warmTag(range),
+    })(),
+  );
 }
