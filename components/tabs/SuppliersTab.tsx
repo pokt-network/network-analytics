@@ -1,12 +1,12 @@
 'use client';
 
-import { IconServer2, IconCoins, IconScale, IconWorld, IconChartBar, IconChartDonut, IconTable } from '@tabler/icons-react';
+import { IconServer2, IconCoins, IconStack2, IconTrendingUp, IconChartBar, IconChartDonut, IconTable } from '@tabler/icons-react';
 import { type RangeKey, SERIES_COLORS, NETWORK_TOTAL_COLOR } from '@/lib/app-config';
 import { useTabData } from '@/lib/use-tab-data';
 import type { SuppliersResponse } from '@/app/api/suppliers/route';
 import type { DomainRow } from '@/lib/data/suppliers';
 import { formatNumber, formatCompact } from '@/lib/format';
-import { StatCard } from '@/components/ui/StatCard';
+import { StatCard, type Trend } from '@/components/ui/StatCard';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { DualAxisChart } from '@/components/charts/DualAxisChart';
 import { DonutChart, type DonutDatum } from '@/components/charts/DonutChart';
@@ -21,6 +21,10 @@ export function SuppliersTab({ range }: { range: RangeKey }) {
   if (!data) return <Loading />;
 
   const { stats } = data;
+
+  const growth = stats.supplierGrowthPct;
+  const growthLabel = growth == null ? '—' : `${growth >= 0 ? '+' : ''}${growth.toFixed(1)}%`;
+  const growthTrend: Trend = growth == null || growth === 0 ? 'flat' : growth > 0 ? 'up' : 'down';
 
   const donutData: DonutDatum[] = data.concentration.map((c, i) => ({
     name: c.domain,
@@ -46,23 +50,23 @@ export function SuppliersTab({ range }: { range: RangeKey }) {
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <StatCard label="Total Suppliers" value={formatNumber(stats.totalSuppliers)} icon={<IconServer2 size={15} />} iconColor="var(--blue-soft)" sub="as of last daily snapshot" />
         <StatCard label="Total Staked" value={formatCompact(stats.totalStakedPokt)} unit="POKT" icon={<IconCoins size={15} />} iconColor="var(--mint)" />
-        <StatCard label="Avg Stake" value={formatCompact(stats.avgStakePokt)} unit="POKT" icon={<IconScale size={15} />} iconColor="var(--gold)" />
-        <StatCard label="Distinct Domains" value={formatNumber(stats.distinctDomains)} icon={<IconWorld size={15} />} iconColor="var(--lavender)" sub="by reward activity" />
+        <StatCard label="Avg Services / Supplier" value={stats.avgServicesPerSupplier.toFixed(1)} icon={<IconStack2 size={15} />} iconColor="var(--gold)" sub="staked service configs" />
+        <StatCard label="Supplier Growth" value={growthLabel} subTrend={growthTrend} sub={`over ${range}`} icon={<IconTrendingUp size={15} />} iconColor="var(--lavender)" />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.6fr_1fr]">
         <Card>
-          <CardHeader title="Supplier & Stake Evolution" icon={<IconChartBar size={18} />} tag={`${range}`} />
+          <CardHeader title="Supplier Base & Churn" icon={<IconChartBar size={18} />} tag={`${range}`} />
           <Legend
             items={[
               { label: 'Suppliers', color: 'var(--blue)' },
-              { label: 'Staked POKT', color: 'var(--mint)' },
+              { label: 'Unstaking', color: 'var(--coral)' },
             ]}
           />
           <DualAxisChart
             data={data.evolution as unknown as Array<Record<string, number | string>>}
             left={{ key: 'suppliers', color: 'var(--blue)', label: 'Suppliers', fmt: (n) => formatNumber(Math.round(n)) }}
-            right={{ key: 'stakedPokt', color: 'var(--mint)', label: 'Staked POKT', fmt: (n) => formatCompact(n) }}
+            right={{ key: 'unstaking', color: 'var(--coral)', label: 'Unstaking', fmt: (n) => formatNumber(Math.round(n)) }}
             interval={data.interval}
             height={260}
           />
