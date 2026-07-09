@@ -22,6 +22,10 @@ export function SuppliersTab({ range }: { range: RangeKey }) {
 
   const { stats } = data;
 
+  // Guard against payload-shape drift: the Vercel Data Cache persists across deploys, so right after a
+  // deploy that changes this payload the cache can briefly serve an old-shaped response missing these
+  // fields. Never call .toFixed on a possibly-undefined number. (The route also bumps its cache key.)
+  const avgSvc = Number.isFinite(stats.avgServicesPerSupplier) ? stats.avgServicesPerSupplier.toFixed(1) : '—';
   const growth = stats.supplierGrowthPct;
   const growthLabel = growth == null ? '—' : `${growth >= 0 ? '+' : ''}${growth.toFixed(1)}%`;
   const growthTrend: Trend = growth == null || growth === 0 ? 'flat' : growth > 0 ? 'up' : 'down';
@@ -50,7 +54,7 @@ export function SuppliersTab({ range }: { range: RangeKey }) {
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <StatCard label="Total Suppliers" value={formatNumber(stats.totalSuppliers)} icon={<IconServer2 size={15} />} iconColor="var(--blue-soft)" sub="as of last daily snapshot" />
         <StatCard label="Total Staked" value={formatCompact(stats.totalStakedPokt)} unit="POKT" icon={<IconCoins size={15} />} iconColor="var(--mint)" />
-        <StatCard label="Avg Services / Supplier" value={stats.avgServicesPerSupplier.toFixed(1)} icon={<IconStack2 size={15} />} iconColor="var(--gold)" sub="staked service configs" />
+        <StatCard label="Avg Services / Supplier" value={avgSvc} icon={<IconStack2 size={15} />} iconColor="var(--gold)" sub="staked service configs" />
         <StatCard label="Supplier Growth" value={growthLabel} subTrend={growthTrend} sub={`over ${range}`} icon={<IconTrendingUp size={15} />} iconColor="var(--lavender)" />
       </div>
 

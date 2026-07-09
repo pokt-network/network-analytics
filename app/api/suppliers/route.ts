@@ -92,8 +92,11 @@ export async function GET(req: NextRequest) {
   const rangeParam = req.nextUrl.searchParams.get('range');
   const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
   // Suppliers change slowly and the per-domain stats are heavy → cache long, warmer keeps it fresh.
+  // NOTE: bump the cache-key version (`sup-v2`) whenever the SupplierStats/evolution payload shape
+  // changes. The Vercel Data Cache persists across deploys, so without a new key a new deployment
+  // would serve old-shaped entries to new client code (→ runtime crash on the missing fields).
   return diagJson('suppliers', () =>
-    unstable_cache(stamped(() => buildSuppliers(range)), ['suppliers', range], {
+    unstable_cache(stamped(() => buildSuppliers(range)), ['suppliers', 'sup-v2', range], {
       revalidate: rangeTTL(range),
       tags: warmTag(range),
     })(),
