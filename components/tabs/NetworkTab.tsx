@@ -44,28 +44,26 @@ export function NetworkTab({ range }: { range: RangeKey }) {
 
       <Card>
         <CardHeader
-          title="Claims / Proofs / Expired"
+          title="Settled Work"
           icon={<IconChartLine size={18} />}
           right={
             <div className="flex items-center gap-2.5">
-              <CardTag>{range} · claimed CU</CardTag>
+              <CardTag>{range} · estimated CU</CardTag>
               <ChartTypeToggle value={claimsType} onChange={setClaimsType} options={['area', 'bar']} />
             </div>
           }
         />
         <Legend
           items={[
-            { label: 'Claim', color: 'var(--lavender)' },
-            { label: 'Proof', color: 'var(--mint)' },
-            { label: 'Expired Proof', color: 'var(--coral)' },
+            { label: 'Proven (settled)', color: 'var(--mint)' },
+            { label: 'Expired (failed)', color: 'var(--coral)' },
           ]}
         />
         <TimeChart
           data={data.claims as unknown as Array<Record<string, number | string>>}
           series={[
-            { key: 'claimCU', color: 'var(--lavender)', label: 'Claim' },
-            { key: 'proofCU', color: 'var(--mint)', label: 'Proof' },
-            { key: 'expiredCU', color: 'var(--coral)', label: 'Expired Proof' },
+            { key: 'provenEstCU', color: 'var(--mint)', label: 'Proven' },
+            { key: 'expiredEstCU', color: 'var(--coral)', label: 'Expired' },
           ]}
           interval={data.interval}
           type={claimsType}
@@ -76,33 +74,32 @@ export function NetworkTab({ range }: { range: RangeKey }) {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
-          <CardHeader title="Participation Evolution" icon={<IconUsersGroup size={18} />} tag={`${range} · counts`} />
+          <CardHeader title="Staked vs Unstaked POKT" icon={<IconCoins size={18} />} tag={`${range} · POKT`} />
           <Legend
             items={[
-              { label: 'Suppliers', color: 'var(--blue)' },
-              { label: 'Apps', color: 'var(--mint)' },
-              { label: 'Validators', color: 'var(--lavender)' },
+              { label: 'Staked', color: 'var(--blue)' },
+              { label: 'Unstaked', color: 'var(--text-tertiary)' },
             ]}
           />
-          <TimeSeriesChart
-            data={data.participation as unknown as Array<Record<string, number | string>>}
+          <AreaTimeChart
+            data={data.staked as unknown as Array<Record<string, number | string>>}
             series={[
-              { key: 'suppliers', color: 'var(--blue)', label: 'Suppliers' },
-              { key: 'apps', color: 'var(--mint)', label: 'Apps' },
-              { key: 'validators', color: 'var(--lavender)', label: 'Validators' },
+              { key: 'stakedPokt', color: 'var(--blue)', label: 'Staked' },
+              { key: 'unstakedPokt', color: 'var(--text-tertiary)', label: 'Unstaked' },
             ]}
             interval={data.interval}
             height={260}
+            yFmt={(n) => formatCompact(n)}
+            stacked
           />
         </Card>
         <Card>
-          <CardHeader title="Staked POKT Evolution" icon={<IconCoins size={18} />} tag={`${range} · suppliers`} />
-          <AreaTimeChart
-            data={data.staked as unknown as Array<Record<string, number | string>>}
-            series={[{ key: 'supplierPokt', color: 'var(--blue)', label: 'Staked POKT' }]}
+          <CardHeader title="Supplier Count" icon={<IconUsersGroup size={18} />} tag={`${range} · staked suppliers`} />
+          <TimeSeriesChart
+            data={data.participation as unknown as Array<Record<string, number | string>>}
+            series={[{ key: 'suppliers', color: 'var(--blue)', label: 'Suppliers' }]}
             interval={data.interval}
             height={260}
-            yFmt={(n) => `${formatCompact(n)}`}
           />
         </Card>
       </div>

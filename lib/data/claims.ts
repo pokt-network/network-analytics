@@ -16,6 +16,8 @@ interface ClaimRaw {
   claim_computed_units: number | string;
   proof_computed_units: number | string;
   expired_proof_computed_units: number | string;
+  proof_estimated_computed_units: number | string;
+  expired_proof_estimated_computed_units: number | string;
 }
 
 export interface ClaimProofPoint {
@@ -23,9 +25,13 @@ export interface ClaimProofPoint {
   claims: number; // count
   proofs: number;
   expiredProofs: number;
-  claimCU: number;
+  claimCU: number; // raw claimed CU — can include unproven over-claims; not charted (see NetworkTab)
   proofCU: number;
   expiredCU: number;
+  // Estimated (difficulty-scaled) proven/expired CU — the true *settled* throughput, matching the
+  // Traffic demand signal. Charted instead of raw claims so unsettled over-claims don't distort it.
+  provenEstCU: number;
+  expiredEstCU: number;
 }
 
 export async function getClaimProofs(range: RangeKey): Promise<ClaimProofPoint[]> {
@@ -45,6 +51,8 @@ export async function getClaimProofs(range: RangeKey): Promise<ClaimProofPoint[]
       claimCU: num(r.claim_computed_units),
       proofCU: num(r.proof_computed_units),
       expiredCU: num(r.expired_proof_computed_units),
+      provenEstCU: num(r.proof_estimated_computed_units),
+      expiredEstCU: num(r.expired_proof_estimated_computed_units),
     }))
     .sort((a, b) => a.date.localeCompare(b.date));
 }

@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { unstable_cache } from 'next/cache';
 import { getSnapshots } from '@/lib/data/snapshots';
 import { getClaimProofs, type ClaimProofPoint } from '@/lib/data/claims';
+import { getSupplyHistory } from '@/lib/data/economy';
 import { rangeWindow, rangeTTL } from '@/lib/timeranges';
 import { DEFAULT_RANGE, isRangeKey, warmTag, type RangeKey } from '@/lib/app-config';
 import { UPOKT_PER_POKT } from '@/lib/config';
@@ -19,16 +20,25 @@ export interface NetworkResponse {
   stats: NetworkStats;
   claims: ClaimProofPoint[];
   participation: Array<{ date: string; suppliers: number; apps: number; validators: number; gateways: number }>;
-  staked: Array<{ date: string; supplierPokt: number; validatorPokt: number; appPokt: number }>;
+  /** Total staked POKT (all actors) vs the rest of supply, per day. */
+  staked: Array<{ date: string; stakedPokt: number; unstakedPokt: number }>;
   interval: 'hour' | 'day' | 'week';
 }
 
 async function buildNetwork(range: RangeKey): Promise<NetworkResponse> {
   const w = rangeWindow(range);
 
-  const [snaps, claims] = await Promise.all([getSnapshots(w.startISO, w.endISO, 3600), getClaimProofs(range)]);
+  const [snaps, claims, supply] = await Promise.all([
+    getSnapshots(w.startISO, w.endISO, 3600),
+    getClaimProofs(range),
+    getSupplyHistory(w.startISO, w.endISO, 3600),
+  ]);
   const latest = snaps.at(-1) ?? null;
   const toPokt = (u: number) => u / UPOKT_PER_POKT;
+
+  // Total supply by day (already in POKT) so we can split each day into staked vs unstaked.
+  const supplyByDay = new Map<string, number>();
+  for (const p of supply) supplyByDay.set(p.date.slice(0, 10), p.totalSupplyPokt);
 
   const stats: NetworkStats = {
     stakedValidators: latest?.stakedValidators ?? 0,
@@ -49,12 +59,13 @@ async function buildNetwork(range: RangeKey): Promise<NetworkResponse> {
       validators: s.stakedValidators,
       gateways: s.stakedGateways,
     })),
-    staked: snaps.map((s) => ({
-      date: s.date,
-      supplierPokt: toPokt(s.supplierTokens),
-      validatorPokt: toPokt(s.validatorTokens),
-      appPokt: toPokt(s.appTokens),
-    })),
+    staked: snaps.map((s) => {
+      const stakedPokt = toPokt(s.supplierTokens + s.validatorTokens + s.appTokens + s.gatewayTokens);
+      const totalSupply = supplyByDay.get(s.date.slice(0, 10));
+      // Unstaked = everything in supply not currently staked (liquid + unmigrated + pools).
+      const unstakedPokt = totalSupply != null ? Math.max(0, totalSupply - stakedPokt) : 0;
+      return { date: s.date, stakedPokt, unstakedPokt };
+    }),
     interval: w.interval,
   };
 }
