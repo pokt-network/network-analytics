@@ -16,10 +16,15 @@ interface State<T> {
 //   • caches responses per-URL so revisiting a range is instant (no skeleton, no refetch flash),
 //   • dedupes concurrent fetches of the same URL,
 //   • silently revalidates stale entries in the background, and
-//   • prefetches sibling ranges after a load so the *first* range toggle is already warm.
+//   • prefetches sibling ranges after a load so the *first* range toggle is already warm — but only
+//     when the primary was a cache HIT (see maybePrefetchSiblings).
+type CacheState = 'HIT' | 'MISS' | null;
+
 interface CacheEntry {
   ts: number;
   data: unknown;
+  /** `x-cache` from the response — lets us skip sibling prefetch when the primary was a cold MISS. */
+  cache: CacheState;
 }
 
 const cache = new Map<string, CacheEntry>();
@@ -35,12 +40,11 @@ function fetchShared(url: string): Promise<unknown> {
   if (existing) return existing;
 
   const p = fetch(url)
-    .then((r) => {
+    .then(async (r) => {
       if (!r.ok) throw new Error(`Request failed (${r.status})`);
-      return r.json();
-    })
-    .then((json) => {
-      cache.set(url, { ts: Date.now(), data: json });
+      const cacheState = (r.headers.get('x-cache') as CacheState) ?? null;
+      const json = await r.json();
+      cache.set(url, { ts: Date.now(), data: json, cache: cacheState });
       return json;
     })
     .finally(() => {
@@ -76,6 +80,16 @@ function prefetchSiblingRanges(url: string): void {
   }
 }
 
+/** Prefetch siblings, but skip when the primary was a confirmed cold MISS. Its siblings are almost
+ *  certainly cold too, and firing 3 more concurrent indexer builds is the worst thing to do while the
+ *  indexer is already the bottleneck (a cold first paint would be 4 builds instead of 1). The warmer
+ *  — or an explicit range click — populates them instead. HIT or unknown primaries prefetch as
+ *  before, keeping range toggles instant in the warm steady state. */
+function maybePrefetchSiblings(url: string): void {
+  if (cache.get(url)?.cache === 'MISS') return;
+  prefetchSiblingRanges(url);
+}
+
 /**
  * Fetch JSON from an internal route handler, refetching when `url` changes.
  * Serves cached data instantly on revisit, keeps prior data visible during a cold fetch, and reports
@@ -101,6 +115,9 @@ export function useTabData<T>(url: string): State<T> {
     if (cached) {
       // Instant paint from cache; quietly revalidate if it's gone stale (no indicator flash).
       setState({ data: cached.data as T, loading: false, error: null });
+      // Already client-cached (a revisit) → the server built this at least once; warm the siblings
+      // unless the last observed server state was cold.
+      maybePrefetchSiblings(url);
       if (Date.now() - cached.ts > STALE_MS) {
         fetchJson(url, false)
           .then((json) => {
@@ -114,14 +131,13 @@ export function useTabData<T>(url: string): State<T> {
       fetchJson(url, true)
         .then((json) => {
           if (active) setState({ data: json as T, loading: false, error: null });
+          // Only now is the primary's cache status known — prefetch siblings iff it wasn't a MISS.
+          maybePrefetchSiblings(url);
         })
         .catch((e: Error) => {
           if (active && e.name !== 'AbortError') setState((s) => ({ data: s.data, loading: false, error: e.message }));
         });
     }
-
-    // Warm the other ranges in the background so the next toggle is instant.
-    prefetchSiblingRanges(url);
 
     return () => {
       active = false;
