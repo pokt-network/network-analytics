@@ -241,6 +241,8 @@ export function TrafficTab({ range, onOpenService }: { range: RangeKey; onOpenSe
             initialSortDir="desc"
             pageSize={10}
             unit="services"
+            csvName="service-performance"
+            range={range}
           />
         </Card>
         <Card>

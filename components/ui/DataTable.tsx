@@ -1,7 +1,8 @@
 'use client';
 
 import { useMemo, useState, type ReactNode } from 'react';
-import { IconChevronUp, IconChevronDown, IconSelector, IconChevronLeft, IconChevronRight } from '@tabler/icons-react';
+import { IconChevronUp, IconChevronDown, IconSelector, IconChevronLeft, IconChevronRight, IconDownload } from '@tabler/icons-react';
+import { toCsv, downloadCsv, csvFilename } from '@/lib/csv';
 
 export interface Column<T> {
   key: string;
@@ -10,6 +11,9 @@ export interface Column<T> {
   render: (row: T) => ReactNode;
   /** Provide to make the column sortable. */
   sortValue?: (row: T) => number | string;
+  /** Raw value for CSV export. Defaults to `sortValue`; set to `null` to omit the column from
+   *  the CSV (e.g. a pure-icon action column). */
+  csvValue?: ((row: T) => number | string) | null;
 }
 
 interface Props<T> {
@@ -23,6 +27,10 @@ interface Props<T> {
   rowKey: (row: T) => string;
   unit?: string; // e.g. "services", "domains" — for the "N services" caption
   onRowClick?: (row: T) => void;
+  /** Filename base for the CSV export (e.g. "service-performance"). Defaults to `unit`. */
+  csvName?: string;
+  /** Active range, appended to the CSV filename for provenance. */
+  range?: string;
 }
 
 export function DataTable<T>({
@@ -36,6 +44,8 @@ export function DataTable<T>({
   rowKey,
   unit = 'rows',
   onRowClick,
+  csvName,
+  range,
 }: Props<T>) {
   const [query, setQuery] = useState('');
   const [sortKey, setSortKey] = useState<string | undefined>(initialSortKey);
@@ -59,6 +69,21 @@ export function DataTable<T>({
       return String(av).localeCompare(String(bv)) * dir;
     });
   }, [filtered, columns, sortKey, sortDir]);
+
+  // Export the full search-filtered set in the current sort order (all pages — pagination is only a
+  // view chunk). Columns opt out of the CSV with `csvValue: null`; otherwise use `csvValue`, falling
+  // back to `sortValue` for the raw underlying value (never the React-rendered cell).
+  const csvColumns = columns.filter((c) => c.csvValue !== null);
+  function exportCsv() {
+    const headers = csvColumns.map((c) => c.header || c.key);
+    const body = sorted.map((r) =>
+      csvColumns.map((c) => {
+        const get = c.csvValue ?? c.sortValue;
+        return get ? get(r) : '';
+      }),
+    );
+    downloadCsv(csvFilename(csvName ?? unit, range), toCsv(headers, body));
+  }
 
   const pages = Math.max(1, Math.ceil(sorted.length / pageSize));
   const clampedPage = Math.min(page, pages);
@@ -92,9 +117,21 @@ export function DataTable<T>({
         ) : (
           <span />
         )}
-        <span className="text-[12px] text-text-tertiary">
-          {sorted.length} {unit} · page {clampedPage} of {pages}
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-[12px] text-text-tertiary">
+            {sorted.length} {unit} · page {clampedPage} of {pages}
+          </span>
+          <button
+            type="button"
+            onClick={exportCsv}
+            disabled={sorted.length === 0}
+            title={sorted.length === 0 ? 'No rows to download' : `Download CSV (${sorted.length} ${unit})`}
+            aria-label="Download CSV"
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border bg-bg-card text-text-secondary transition-colors hover:enabled:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <IconDownload size={15} />
+          </button>
+        </div>
       </div>
 
       <div className="overflow-x-auto">

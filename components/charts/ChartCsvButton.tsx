@@ -2,7 +2,7 @@
 
 import { IconDownload } from '@tabler/icons-react';
 import type { SeriesDef } from './TimeChart';
-import { chartCsv, downloadCsv, slug } from '@/lib/csv';
+import { chartCsv, downloadCsv, csvFilename } from '@/lib/csv';
 
 type Row = Record<string, number | string | null>;
 
@@ -29,9 +29,7 @@ export function ChartCsvButton({
 
   const onClick = () => {
     if (disabled) return;
-    const date = new Date().toISOString().slice(0, 10);
-    const parts = ['pocket', slug(name), range && slug(range), date].filter(Boolean);
-    downloadCsv(`${parts.join('-')}.csv`, chartCsv(data, series, xKey));
+    downloadCsv(csvFilename(name, range), chartCsv(data, series, xKey));
   };
 
   return (

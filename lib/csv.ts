@@ -51,3 +51,9 @@ export function downloadCsv(filename: string, csv: string): void {
 export function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
+
+/** Provenance-tagged download name: `pocket-<name>-<range?>-<YYYY-MM-DD>.csv`. */
+export function csvFilename(name: string, range?: string): string {
+  const date = new Date().toISOString().slice(0, 10);
+  return ['pocket', slug(name), range && slug(range), date].filter(Boolean).join('-') + '.csv';
+}

@@ -98,6 +98,8 @@ export function ServicesTab({
               initialSortDir="desc"
               pageSize={LIST_PAGE_SIZE}
               unit="services"
+              csvName="service-analytics"
+              range={range}
               onRowClick={(r) => onSelectService({ id: r.id, name: r.name })}
             />
           )}

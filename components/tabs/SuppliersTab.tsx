@@ -132,6 +132,8 @@ export function SuppliersTab({ range }: { range: RangeKey }) {
           initialSortDir="desc"
           pageSize={10}
           unit="domains"
+          csvName="suppliers-by-domain"
+          range={range}
         />
       </Card>
     </div>

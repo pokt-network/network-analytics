@@ -1,12 +1,14 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { IconWallet, IconListCheck, IconCoin, IconReceipt, IconUsers, IconPercentage, IconChartLine, IconListDetails, IconExternalLink } from '@tabler/icons-react';
+import { IconWallet, IconListCheck, IconCoin, IconReceipt, IconUsers, IconPercentage, IconChartLine, IconListDetails, IconExternalLink, IconDownload } from '@tabler/icons-react';
 import { EXPLORER_BASE_URL, OWNER_ADDRESS_CAP, SERIES_COLORS, NETWORK_TOTAL_COLOR, type RangeKey } from '@/lib/app-config';
+import { UPOKT_PER_POKT } from '@/lib/config';
 import { loadAddresses, saveAddresses, parseAddressInput } from '@/lib/owner-storage';
 import { useTabData } from '@/lib/use-tab-data';
 import type { OwnerResponse } from '@/app/api/owner/route';
-import type { IssuancePage } from '@/lib/data/owner';
+import type { IssuancePage, Issuance } from '@/lib/data/owner';
+import { toCsv, downloadCsv, csvFilename } from '@/lib/csv';
 import { formatNumber, formatCompact, formatPokt, truncate } from '@/lib/format';
 import { StatCard } from '@/components/ui/StatCard';
 import { Card, CardHeader } from '@/components/ui/Card';
@@ -15,6 +17,11 @@ import { TimeSeriesChart, type SeriesDef } from '@/components/charts/TimeSeriesC
 import { ChartSkeleton, EmptyState } from '@/components/ui/states';
 
 const PAGE_SIZE = 25;
+// CSV export walks the indexer 100 rows at a time (its hard page cap). A single owner can have ~1M
+// settlements and deep OFFSET paging degrades sharply, so cap the export at the most-recent N. 5,000
+// rows = ~50 chunked requests — enough for meaningful analysis without hammering the indexer.
+const EXPORT_CAP = 5000;
+const EXPORT_CHUNK = 100;
 
 export function OwnerStakingView() {
   const [addresses, setAddresses] = useState<string[]>([]);
@@ -23,6 +30,8 @@ export function OwnerStakingView() {
   const [range, setRange] = useState<RangeKey>('7d');
   const [groupAll, setGroupAll] = useState(false);
   const [page, setPage] = useState(1);
+  const [exporting, setExporting] = useState(false);
+  const [exportNote, setExportNote] = useState<string | null>(null);
 
   // Hydrate from localStorage after mount. This is a deliberate external-store sync (localStorage
   // isn't available during SSR, so a lazy initializer would cause a hydration mismatch).
@@ -51,6 +60,53 @@ export function OwnerStakingView() {
     setInput('');
     saveAddresses([]);
     setDropped(0);
+  }
+
+  // CSV export: the table is server-paginated, so walk pages (100/req — the indexer's cap) and
+  // assemble the history before downloading. Ordered newest-first (BLOCK_ID_DESC). A single owner can
+  // have ~1M settlements and deep OFFSET paging degrades fast, so the export is capped at the
+  // most-recent EXPORT_CAP rows and the truncation is surfaced, never silent. Amounts export as plain
+  // POKT numbers (no separators) so they parse cleanly in Excel/pandas.
+  async function exportIssuancesCsv() {
+    if (exporting || addresses.length === 0) return;
+    setExporting(true);
+    setExportNote(null);
+    try {
+      const all: Issuance[] = [];
+      let p = 1;
+      let total = Infinity;
+      while (all.length < total && all.length < EXPORT_CAP) {
+        const res = await fetch(`/api/owner/issuances?addresses=${addrParam}&page=${p}&pageSize=${EXPORT_CHUNK}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data: IssuancePage = await res.json();
+        total = data.totalCount ?? 0;
+        all.push(...data.rows);
+        if (data.rows.length === 0) break; // safety: nothing more to page through
+        p++;
+      }
+      const rows = all.slice(0, EXPORT_CAP);
+      const headers = ['Block', 'Service', 'Owner', 'Relays', 'Settled (POKT)', 'Minted (POKT)', 'Mint Ratio', 'Transaction'];
+      const body = rows.map((r) => [
+        r.block,
+        r.serviceId,
+        r.owner,
+        r.relays,
+        r.settledUpokt / UPOKT_PER_POKT,
+        r.mintedUpokt / UPOKT_PER_POKT,
+        r.mintRatio,
+        r.transactionId ?? '',
+      ]);
+      downloadCsv(csvFilename('reward-issuances'), toCsv(headers, body));
+      setExportNote(
+        rows.length < total
+          ? `Exported the ${formatNumber(rows.length)} most recent of ${formatNumber(total)} settlements — the export is capped for performance.`
+          : `Exported all ${formatNumber(rows.length)} settlements.`,
+      );
+    } catch {
+      setExportNote('Export failed — please try again.');
+    } finally {
+      setExporting(false);
+    }
   }
 
   const colorFor = useMemo(() => {
@@ -147,7 +203,33 @@ export function OwnerStakingView() {
           </Card>
 
           <Card>
-            <CardHeader title="Reward Issuances" icon={<IconListDetails size={18} />} tag="settlement events" />
+            <CardHeader
+              title="Reward Issuances"
+              icon={<IconListDetails size={18} />}
+              right={
+                <div className="flex items-center gap-2.5">
+                  <span className="rounded-md border px-2 py-0.5 text-[11px] text-text-secondary">settlement events</span>
+                  <button
+                    type="button"
+                    onClick={exportIssuancesCsv}
+                    disabled={exporting || totalCount === 0}
+                    title={
+                      totalCount === 0
+                        ? 'No settlements to download'
+                        : exporting
+                          ? 'Preparing CSV…'
+                          : totalCount <= EXPORT_CAP
+                            ? `Download all ${formatNumber(totalCount)} settlements as CSV`
+                            : `Download the ${formatNumber(EXPORT_CAP)} most recent of ${formatNumber(totalCount)} settlements as CSV`
+                    }
+                    aria-label="Download CSV"
+                    className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border bg-bg-card text-text-secondary transition-colors hover:enabled:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <IconDownload size={15} className={exporting ? 'animate-pulse' : ''} />
+                  </button>
+                </div>
+              }
+            />
             <div className="overflow-x-auto">
               <table className="w-full border-collapse text-[13px]">
                 <thead>
@@ -195,6 +277,7 @@ export function OwnerStakingView() {
                 <button type="button" disabled={page >= pages} onClick={() => setPage((p) => p + 1)} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>
               </div>
             </div>
+            {exportNote && <p className="mt-3 text-[12px] text-text-secondary">{exportNote}</p>}
             <p className="mt-3 text-[12px] italic text-text-tertiary">
               Each row is a settlement event, not a transaction. The ↗ link opens the underlying tx in the Explorer — the only crossover point.
             </p>
