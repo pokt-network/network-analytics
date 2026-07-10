@@ -18,11 +18,17 @@ import { StatCard } from '@/components/ui/StatCard';
 import { Card, CardHeader, CardTag } from '@/components/ui/Card';
 import { AreaTimeChart } from '@/components/charts/AreaTimeChart';
 import { TimeSeriesChart } from '@/components/charts/TimeSeriesChart';
-import { TimeChart, type ChartType } from '@/components/charts/TimeChart';
+import { TimeChart, type ChartType, type SeriesDef } from '@/components/charts/TimeChart';
 import { ChartTypeToggle } from '@/components/charts/ChartTypeToggle';
+import { ChartCsvButton } from '@/components/charts/ChartCsvButton';
 import { ChartSkeleton, ErrorState } from '@/components/ui/states';
 
 const SNAP = 'as of last daily snapshot';
+
+const CLAIMS_SERIES: SeriesDef[] = [
+  { key: 'provenEstCU', color: 'var(--mint)', label: 'Proven' },
+  { key: 'expiredEstCU', color: 'var(--coral)', label: 'Expired' },
+];
 
 export function NetworkTab({ range }: { range: RangeKey }) {
   const { data, error } = useTabData<NetworkResponse>(`/api/network?range=${range}`);
@@ -50,6 +56,12 @@ export function NetworkTab({ range }: { range: RangeKey }) {
             <div className="flex items-center gap-2.5">
               <CardTag>{range} · estimated CU</CardTag>
               <ChartTypeToggle value={claimsType} onChange={setClaimsType} options={['area', 'bar']} />
+              <ChartCsvButton
+                data={data.claims as unknown as Array<Record<string, number | string>>}
+                series={CLAIMS_SERIES}
+                name="settled-work"
+                range={range}
+              />
             </div>
           }
         />
@@ -61,10 +73,7 @@ export function NetworkTab({ range }: { range: RangeKey }) {
         />
         <TimeChart
           data={data.claims as unknown as Array<Record<string, number | string>>}
-          series={[
-            { key: 'provenEstCU', color: 'var(--mint)', label: 'Proven' },
-            { key: 'expiredEstCU', color: 'var(--coral)', label: 'Expired' },
-          ]}
+          series={CLAIMS_SERIES}
           interval={data.interval}
           type={claimsType}
           projected

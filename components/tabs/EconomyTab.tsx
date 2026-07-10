@@ -19,14 +19,20 @@ import { formatCompact } from '@/lib/format';
 import { StatCard } from '@/components/ui/StatCard';
 import { Card, CardHeader, CardTag } from '@/components/ui/Card';
 import { SupplyHistoryChart } from '@/components/charts/SupplyHistoryChart';
-import { TimeChart, type ChartType } from '@/components/charts/TimeChart';
+import { TimeChart, type ChartType, type SeriesDef } from '@/components/charts/TimeChart';
 import { ChartTypeToggle } from '@/components/charts/ChartTypeToggle';
+import { ChartCsvButton } from '@/components/charts/ChartCsvButton';
 import { ProjectionChart } from '@/components/charts/ProjectionChart';
 import { DonutChart, type DonutDatum } from '@/components/charts/DonutChart';
 import { ChartSkeleton, ErrorState } from '@/components/ui/states';
 import { Legend } from './NetworkTab';
 
 const COMP_COLORS = ['#5a656d', 'var(--lavender)', 'var(--blue-soft)', 'var(--mint)', 'var(--gold)'];
+
+const BURN_MINT_SERIES: SeriesDef[] = [
+  { key: 'mintPokt', color: 'var(--gold)', label: 'Minted' },
+  { key: 'burnPokt', color: 'var(--coral)', label: 'Burned' },
+];
 
 export function EconomyTab({ range }: { range: RangeKey }) {
   const { data, error } = useTabData<EconomyResponse>('/api/economy');
@@ -111,6 +117,14 @@ export function EconomyTab({ range }: { range: RangeKey }) {
               <div className="flex items-center gap-2.5">
                 <CardTag>{range} · gross</CardTag>
                 <ChartTypeToggle value={burnMintType} onChange={setBurnMintType} options={['bar', 'line']} />
+                {bm && (
+                  <ChartCsvButton
+                    data={bm.series as unknown as Array<Record<string, number | string>>}
+                    series={BURN_MINT_SERIES}
+                    name="burn-vs-mint"
+                    range={range}
+                  />
+                )}
               </div>
             }
           />
@@ -127,10 +141,7 @@ export function EconomyTab({ range }: { range: RangeKey }) {
           ) : (
             <TimeChart
               data={bm.series as unknown as Array<Record<string, number | string>>}
-              series={[
-                { key: 'mintPokt', color: 'var(--gold)', label: 'Minted' },
-                { key: 'burnPokt', color: 'var(--coral)', label: 'Burned' },
-              ]}
+              series={BURN_MINT_SERIES}
               interval={RANGE_SPECS[range].interval}
               type={burnMintType}
               projected

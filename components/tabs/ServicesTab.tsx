@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { IconSearch, IconCpu, IconBolt, IconServer2, IconCoin, IconChartLine, IconInfoCircle, IconList, IconX } from '@tabler/icons-react';
 import { type RangeKey, RANGE_SPECS } from '@/lib/app-config';
 import { useTabData } from '@/lib/use-tab-data';
@@ -7,13 +8,17 @@ import type { ServiceDetail } from '@/lib/data/services';
 import type { ServiceAnalyticsRow } from '@/app/api/services/analytics/route';
 import { formatCompact, formatNumber } from '@/lib/format';
 import { StatCard } from '@/components/ui/StatCard';
-import { Card, CardHeader } from '@/components/ui/Card';
-import { TimeChart } from '@/components/charts/TimeChart';
+import { Card, CardHeader, CardTag } from '@/components/ui/Card';
+import { TimeChart, type ChartType, type SeriesDef } from '@/components/charts/TimeChart';
+import { ChartTypeToggle } from '@/components/charts/ChartTypeToggle';
+import { ChartCsvButton } from '@/components/charts/ChartCsvButton';
 import { DataTable, type Column } from '@/components/ui/DataTable';
 import { ChartSkeleton, ErrorState } from '@/components/ui/states';
 import { ServicePicker, type ServiceItem } from './ServicePicker';
 
 const LIST_PAGE_SIZE = 50;
+
+const VOLUME_SERIES: SeriesDef[] = [{ key: 'estimatedCU', color: 'var(--blue)', label: 'Estimated CU' }];
 
 // `svc` is owned by the Dashboard so other tabs can open a service here (see onOpenService).
 export function ServicesTab({
@@ -25,6 +30,7 @@ export function ServicesTab({
   svc: ServiceItem | null;
   onSelectService: (s: ServiceItem | null) => void;
 }) {
+  const [volType, setVolType] = useState<ChartType>('line');
   // Top-level analytics table (range-aware suppliers + CU), and the full id/name list for the picker.
   const analytics = useTabData<{ services: ServiceAnalyticsRow[] }>(`/api/services/analytics?range=${range}`);
   const pickerList = useTabData<{ services: ServiceItem[] }>('/api/services/list');
@@ -116,12 +122,27 @@ export function ServicesTab({
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.6fr_1fr]">
             <Card>
-              <CardHeader title={`${data.info.id} — Volume Trend`} icon={<IconChartLine size={18} />} tag={`${range} · estimated CU`} />
+              <CardHeader
+                title={`${data.info.id} — Volume Trend`}
+                icon={<IconChartLine size={18} />}
+                right={
+                  <div className="flex items-center gap-2.5">
+                    <CardTag>{range} · estimated CU</CardTag>
+                    <ChartTypeToggle value={volType} onChange={setVolType} options={['line', 'bar']} />
+                    <ChartCsvButton
+                      data={data.series as unknown as Array<Record<string, number | string>>}
+                      series={VOLUME_SERIES}
+                      name={`service-${data.info.id}-volume`}
+                      range={range}
+                    />
+                  </div>
+                }
+              />
               <TimeChart
                 data={data.series as unknown as Array<Record<string, number | string>>}
-                series={[{ key: 'estimatedCU', color: 'var(--blue)', label: 'Estimated CU' }]}
+                series={VOLUME_SERIES}
                 interval={RANGE_SPECS[range].interval}
-                type="line"
+                type={volType}
                 projected
                 height={280}
               />

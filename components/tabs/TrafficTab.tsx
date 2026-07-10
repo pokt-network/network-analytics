@@ -11,6 +11,7 @@ import { StatCard, type Trend } from '@/components/ui/StatCard';
 import { Card, CardHeader, CardTag } from '@/components/ui/Card';
 import { TimeChart, type SeriesDef, type ChartType } from '@/components/charts/TimeChart';
 import { ChartTypeToggle } from '@/components/charts/ChartTypeToggle';
+import { ChartCsvButton } from '@/components/charts/ChartCsvButton';
 import { DonutChart, type DonutDatum } from '@/components/charts/DonutChart';
 import { DataTable, type Column } from '@/components/ui/DataTable';
 import { MultiSelect, type MultiOption } from '@/components/ui/MultiSelect';
@@ -183,6 +184,7 @@ export function TrafficTab({ range, onOpenService }: { range: RangeKey; onOpenSe
                 Show network total
               </label>
               <ChartTypeToggle value={chartType} onChange={setChartType} options={['line', 'bar']} />
+              <ChartCsvButton data={data.series.rows} series={chartSeries} name="traffic-over-time" range={range} />
               <MultiSelect
                 options={msOptions}
                 selected={sel}

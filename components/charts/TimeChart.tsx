@@ -27,6 +27,9 @@ interface Props {
   projected?: boolean;
   /** Deterministic "now" for the projection (defaults to Date.now()). */
   nowMs?: number;
+  /** Explicit y-axis domain — fit it to the data range so a small-percentage trend reads as real
+   *  movement instead of a near-flat line. Ignored for bars, which must keep a 0-based baseline. */
+  yDomain?: [number | string, number | string];
 }
 
 const AXIS = 'var(--text-secondary)';
@@ -120,7 +123,7 @@ function projectLine(
   return { data: [...rows.slice(0, n - 1), split, projected], ticks };
 }
 
-export function TimeChart({ data, series, interval, type, height = 340, xKey = 'date', yFmt = fmtNum, projected = false, nowMs }: Props) {
+export function TimeChart({ data, series, interval, type, height = 340, xKey = 'date', yFmt = fmtNum, projected = false, nowMs, yDomain }: Props) {
   // Capture wall-clock once at mount for the projection baseline (this chart only renders
   // client-side after data loads, so there's no SSR/hydration concern).
   const [mountNow] = useState(() => Date.now());
@@ -174,7 +177,7 @@ export function TimeChart({ data, series, interval, type, height = 340, xKey = '
             stroke={GRID}
             minTickGap={type === 'bar' ? 16 : 24}
           />
-          <YAxis tickFormatter={(v) => yFmt(Number(v))} tick={{ fill: AXIS, fontSize: 11 }} stroke={GRID} width={52} />
+          <YAxis domain={isBar ? undefined : yDomain} tickFormatter={(v) => yFmt(Number(v))} tick={{ fill: AXIS, fontSize: 11 }} stroke={GRID} width={52} />
           <Tooltip content={<SeriesTooltip yFmt={yFmt} labelFmt={labelFmt} />} cursor={type === 'bar' ? { fill: 'var(--bg-card-hover)' } : undefined} />
 
           {/* Confirmed series. Bars additionally stack a translucent "remainder" for the current

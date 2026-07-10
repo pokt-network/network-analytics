@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { IconServer2, IconCoins, IconStack2, IconTrendingUp, IconChartBar, IconChartDonut, IconTable } from '@tabler/icons-react';
 import { type RangeKey, SERIES_COLORS, NETWORK_TOTAL_COLOR } from '@/lib/app-config';
 import { useTabData } from '@/lib/use-tab-data';
@@ -7,13 +8,18 @@ import type { SuppliersResponse } from '@/app/api/suppliers/route';
 import type { DomainRow } from '@/lib/data/suppliers';
 import { formatNumber, formatCompact } from '@/lib/format';
 import { StatCard, type Trend } from '@/components/ui/StatCard';
-import { Card, CardHeader } from '@/components/ui/Card';
-import { AreaTimeChart } from '@/components/charts/AreaTimeChart';
+import { Card, CardHeader, CardTag } from '@/components/ui/Card';
+import { TimeChart, type ChartType, type SeriesDef } from '@/components/charts/TimeChart';
+import { ChartTypeToggle } from '@/components/charts/ChartTypeToggle';
+import { ChartCsvButton } from '@/components/charts/ChartCsvButton';
 import { DonutChart, type DonutDatum } from '@/components/charts/DonutChart';
 import { DataTable, type Column } from '@/components/ui/DataTable';
 import { ChartSkeleton, ErrorState } from '@/components/ui/states';
 
+const SUPPLIER_SERIES: SeriesDef[] = [{ key: 'suppliers', color: 'var(--blue)', label: 'Suppliers' }];
+
 export function SuppliersTab({ range }: { range: RangeKey }) {
+  const [baseType, setBaseType] = useState<ChartType>('area');
   const { data, error } = useTabData<SuppliersResponse>(`/api/suppliers?range=${range}`);
 
   if (error) return <ErrorState>Couldn’t load supplier data: {error}</ErrorState>;
@@ -68,13 +74,31 @@ export function SuppliersTab({ range }: { range: RangeKey }) {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.6fr_1fr]">
         <Card>
-          <CardHeader title="Supplier Base" icon={<IconChartBar size={18} />} tag={`${range} · staked suppliers`} />
-          <AreaTimeChart
+          <CardHeader
+            title="Supplier Base"
+            icon={<IconChartBar size={18} />}
+            right={
+              <div className="flex items-center gap-2.5">
+                <CardTag>{range} · staked suppliers</CardTag>
+                <ChartTypeToggle value={baseType} onChange={setBaseType} options={['area', 'bar']} />
+                <ChartCsvButton
+                  data={data.evolution as unknown as Array<Record<string, number | string>>}
+                  series={SUPPLIER_SERIES}
+                  name="supplier-base"
+                  range={range}
+                />
+              </div>
+            }
+          />
+          <TimeChart
             data={data.evolution as unknown as Array<Record<string, number | string>>}
-            series={[{ key: 'suppliers', color: 'var(--blue)', label: 'Suppliers' }]}
+            series={SUPPLIER_SERIES}
             interval={data.interval}
+            type={baseType}
             height={360}
             yFmt={(n) => formatNumber(Math.round(n))}
+            // Bars keep a 0-based axis (TimeChart ignores yDomain for bars); the area view uses the
+            // padded domain so the count trend reads as real movement, not a flat line.
             yDomain={supDomain}
           />
         </Card>
