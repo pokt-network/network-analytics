@@ -14,6 +14,9 @@ export interface Column<T> {
   /** Raw value for CSV export. Defaults to `sortValue`; set to `null` to omit the column from
    *  the CSV (e.g. a pure-icon action column). */
   csvValue?: ((row: T) => number | string) | null;
+  /** Hide this column below the `sm` breakpoint to keep the table within a phone's width without
+   *  horizontal scroll. The column still exports to CSV. Reserve for secondary columns. */
+  hideOnMobile?: boolean;
 }
 
 interface Props<T> {
@@ -144,9 +147,11 @@ export function DataTable<T>({
                   <th
                     key={c.key}
                     onClick={() => toggleSort(c)}
-                    className={`border-b px-3 pb-[11px] text-[11px] font-medium uppercase tracking-[0.5px] text-text-secondary ${
+                    className={`border-b px-1.5 pb-[11px] text-[11px] font-medium uppercase tracking-[0.5px] text-text-secondary sm:px-3 ${
                       c.align === 'right' ? 'text-right' : 'text-left'
-                    } ${c.sortValue ? 'cursor-pointer select-none hover:text-text-primary' : ''} whitespace-nowrap`}
+                    } ${c.sortValue ? 'cursor-pointer select-none hover:text-text-primary' : ''} ${
+                      c.hideOnMobile ? 'hidden sm:table-cell' : ''
+                    } whitespace-normal sm:whitespace-nowrap`}
                   >
                     <span className="inline-flex items-center gap-1">
                       {c.header}
@@ -176,7 +181,9 @@ export function DataTable<T>({
                 {columns.map((c) => (
                   <td
                     key={c.key}
-                    className={`border-b px-3 py-3 ${c.align === 'right' ? 'text-right tabular-nums' : 'text-left'}`}
+                    className={`border-b px-1.5 py-3 sm:px-3 ${c.align === 'right' ? 'text-right tabular-nums' : 'text-left'} ${
+                      c.hideOnMobile ? 'hidden sm:table-cell' : ''
+                    }`}
                   >
                     {c.render(r)}
                   </td>

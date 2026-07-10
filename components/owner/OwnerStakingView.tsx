@@ -181,7 +181,7 @@ export function OwnerStakingView() {
               title="Rewards Over Time"
               icon={<IconChartLine size={18} />}
               right={
-                <div className="flex items-center gap-2.5">
+                <div className="flex flex-wrap items-center justify-end gap-2.5">
                   <button
                     type="button"
                     onClick={() => setGroupAll((g) => !g)}
@@ -207,7 +207,7 @@ export function OwnerStakingView() {
               title="Reward Issuances"
               icon={<IconListDetails size={18} />}
               right={
-                <div className="flex items-center gap-2.5">
+                <div className="flex flex-wrap items-center justify-end gap-2.5">
                   <span className="rounded-md border px-2 py-0.5 text-[11px] text-text-secondary">settlement events</span>
                   <button
                     type="button"
@@ -234,24 +234,32 @@ export function OwnerStakingView() {
               <table className="w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
-                    {['Block', 'Service', 'Address', 'Relays', 'Settled', 'Minted', 'Ratio', ''].map((h, i) => (
-                      <th key={h || i} className={`border-b px-3 pb-[11px] text-[11px] font-medium uppercase tracking-[0.5px] text-text-secondary ${i >= 3 && i <= 6 ? 'text-right' : 'text-left'}`}>
-                        {h}
-                      </th>
-                    ))}
+                    {['Block', 'Service', 'Address', 'Relays', 'Settled', 'Minted', 'Ratio', ''].map((h, i) => {
+                      // Secondary columns collapse below sm to keep this 8-col table off a horizontal
+                      // scroll on phones; Block / Service / Minted / tx-link stay.
+                      const hideOnMobile = i === 2 || i === 3 || i === 4 || i === 6;
+                      return (
+                        <th
+                          key={h || i}
+                          className={`border-b px-1.5 pb-[11px] text-[11px] font-medium uppercase tracking-[0.5px] text-text-secondary sm:px-3 ${i >= 3 && i <= 6 ? 'text-right' : 'text-left'} ${hideOnMobile ? 'hidden sm:table-cell' : ''}`}
+                        >
+                          {h}
+                        </th>
+                      );
+                    })}
                   </tr>
                 </thead>
                 <tbody>
                   {issuances.data?.rows.map((r, i) => (
                     <tr key={`${r.block}-${r.serviceId}-${i}`} className="hover:bg-bg-card-hover">
-                      <td className="border-b px-3 py-3 font-mono">{formatNumber(r.block)}</td>
-                      <td className="border-b px-3 py-3 font-medium text-blue-soft">{r.serviceId}</td>
-                      <td className="border-b px-3 py-3 font-mono text-text-secondary">{truncate(r.owner, 8, 4)}</td>
-                      <td className="border-b px-3 py-3 text-right tabular-nums">{formatNumber(r.relays)}</td>
-                      <td className="border-b px-3 py-3 text-right tabular-nums">{formatPokt(r.settledUpokt)}</td>
-                      <td className="border-b px-3 py-3 text-right tabular-nums">{formatPokt(r.mintedUpokt)}</td>
-                      <td className="border-b px-3 py-3 text-right tabular-nums">{r.mintRatio.toFixed(3)}</td>
-                      <td className="border-b px-3 py-3 text-right">
+                      <td className="border-b px-1.5 py-3 font-mono sm:px-3">{formatNumber(r.block)}</td>
+                      <td className="border-b px-1.5 py-3 font-medium text-blue-soft sm:px-3">{r.serviceId}</td>
+                      <td className="hidden border-b px-1.5 py-3 font-mono text-text-secondary sm:table-cell sm:px-3">{truncate(r.owner, 8, 4)}</td>
+                      <td className="hidden border-b px-1.5 py-3 text-right tabular-nums sm:table-cell sm:px-3">{formatNumber(r.relays)}</td>
+                      <td className="hidden border-b px-1.5 py-3 text-right tabular-nums sm:table-cell sm:px-3">{formatPokt(r.settledUpokt)}</td>
+                      <td className="border-b px-1.5 py-3 text-right tabular-nums sm:px-3">{formatPokt(r.mintedUpokt)}</td>
+                      <td className="hidden border-b px-1.5 py-3 text-right tabular-nums sm:table-cell sm:px-3">{r.mintRatio.toFixed(3)}</td>
+                      <td className="border-b px-1.5 py-3 text-right sm:px-3">
                         {r.transactionId ? (
                           <a href={`${EXPLORER_BASE_URL}/tx/${r.transactionId}`} target="_blank" rel="noopener noreferrer" className="text-text-secondary hover:text-blue-soft" title="Open tx in Explorer">
                             <IconExternalLink size={15} />

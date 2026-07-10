@@ -55,12 +55,18 @@ export function SuppliersTab({ range }: { range: RangeKey }) {
       key: 'domain',
       header: 'Domain',
       sortValue: (r) => r.domain,
-      render: (r) => <span className="font-mono text-[12.5px]">{r.domain}</span>,
+      // Cap the width on phones so a long domain can't force a horizontal scroll; the full value stays
+      // available on hover (title) and in the CSV export.
+      render: (r) => (
+        <span className="block max-w-[96px] truncate font-mono text-[12.5px] sm:max-w-none" title={r.domain}>
+          {r.domain}
+        </span>
+      ),
     },
     { key: 'suppliers', header: 'Suppliers', align: 'right', sortValue: (r) => r.suppliers, render: (r) => formatNumber(r.suppliers) },
     { key: 'staked', header: 'Total Staked', align: 'right', sortValue: (r) => r.stakedPokt, render: (r) => formatCompact(r.stakedPokt) },
-    { key: 'avg', header: 'Avg Stake', align: 'right', sortValue: (r) => r.avgStakePokt, render: (r) => formatCompact(r.avgStakePokt) },
-    { key: 'share', header: 'Share', align: 'right', sortValue: (r) => r.sharePct, render: (r) => `${r.sharePct.toFixed(1)}%` },
+    { key: 'avg', header: 'Avg Stake', align: 'right', sortValue: (r) => r.avgStakePokt, render: (r) => formatCompact(r.avgStakePokt), hideOnMobile: true },
+    { key: 'share', header: 'Share', align: 'right', sortValue: (r) => r.sharePct, render: (r) => `${r.sharePct.toFixed(1)}%`, hideOnMobile: true },
   ];
 
   return (
@@ -78,7 +84,7 @@ export function SuppliersTab({ range }: { range: RangeKey }) {
             title="Supplier Base"
             icon={<IconChartBar size={18} />}
             right={
-              <div className="flex items-center gap-2.5">
+              <div className="flex flex-wrap items-center justify-end gap-2.5">
                 <CardTag>{range} · staked suppliers</CardTag>
                 <ChartTypeToggle value={baseType} onChange={setBaseType} options={['area', 'bar']} />
                 <ChartCsvButton

@@ -53,7 +53,7 @@ export function NetworkTab({ range }: { range: RangeKey }) {
           title="Settled Work"
           icon={<IconChartLine size={18} />}
           right={
-            <div className="flex items-center gap-2.5">
+            <div className="flex flex-wrap items-center justify-end gap-2.5">
               <CardTag>{range} · estimated CU</CardTag>
               <ChartTypeToggle value={claimsType} onChange={setClaimsType} options={['area', 'bar']} />
               <ChartCsvButton

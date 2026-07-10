@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { IconActivity, IconCoin, IconAffiliate, IconServer2, IconStack2, IconLoader2 } from '@tabler/icons-react';
+import { IconLoader2 } from '@tabler/icons-react';
 import { useIsFetching } from '@/lib/loading-store';
 import { RangePills } from './RangePills';
-import { Tabbar, type TabDef } from './Tabbar';
+import { Tabbar } from './Tabbar';
+import { TABS, isTabKey, type TabKey } from './tabs';
 import { DEFAULT_RANGE, isRangeKey, type RangeKey } from '@/lib/app-config';
 import { TrafficTab } from '@/components/tabs/TrafficTab';
 import { NetworkTab } from '@/components/tabs/NetworkTab';
@@ -12,21 +13,6 @@ import { SuppliersTab } from '@/components/tabs/SuppliersTab';
 import { EconomyTab } from '@/components/tabs/EconomyTab';
 import { ServicesTab } from '@/components/tabs/ServicesTab';
 import type { ServiceItem } from '@/components/tabs/ServicePicker';
-
-type TabKey = 'traffic' | 'economy' | 'network' | 'suppliers' | 'services';
-
-const TABS: (TabDef & { key: TabKey })[] = [
-  { key: 'traffic', label: 'Traffic', icon: <IconActivity size={17} /> },
-  { key: 'economy', label: 'Economy', icon: <IconCoin size={17} /> },
-  { key: 'network', label: 'Network', icon: <IconAffiliate size={17} /> },
-  { key: 'suppliers', label: 'Suppliers', icon: <IconServer2 size={17} /> },
-  { key: 'services', label: 'Services', icon: <IconStack2 size={17} /> },
-];
-
-const TAB_KEYS = TABS.map((t) => t.key);
-function isTabKey(v: string | null | undefined): v is TabKey {
-  return v != null && (TAB_KEYS as string[]).includes(v);
-}
 
 export function Dashboard({ initialTab, initialRange, initialService }: { initialTab?: string; initialRange?: string; initialService?: string }) {
   // tab / range / service live in the URL so the dashboard is deep-linkable. The initial values come
@@ -103,7 +89,7 @@ export function Dashboard({ initialTab, initialRange, initialService }: { initia
             Traffic, economics, and protocol health — sourced from data.pocket.network
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex w-full items-center justify-end gap-3 sm:w-auto">
           <span
             className={`flex items-center gap-1.5 text-[12.5px] font-medium text-text-secondary transition-opacity duration-200 ${
               fetching ? 'opacity-100' : 'opacity-0'

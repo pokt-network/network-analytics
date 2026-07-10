@@ -92,7 +92,7 @@ export function TrafficTab({ range, onOpenService }: { range: RangeKey; onOpenSe
         </button>
       ),
     },
-    { key: 'label', header: 'Label', sortValue: (r) => r.serviceName, render: (r) => r.serviceName || '—' },
+    { key: 'label', header: 'Label', sortValue: (r) => r.serviceName, render: (r) => r.serviceName || '—', hideOnMobile: true },
     {
       key: 'net',
       header: 'Net %',
@@ -104,6 +104,7 @@ export function TrafficTab({ range, onOpenService }: { range: RangeKey; onOpenSe
       key: 'change',
       header: 'Change',
       align: 'right',
+      hideOnMobile: true,
       sortValue: (r) => r.change,
       render: (r) => (
         <span className={r.change > 0.05 ? 'text-mint' : r.change < -0.05 ? 'text-coral' : ''}>
@@ -123,6 +124,7 @@ export function TrafficTab({ range, onOpenService }: { range: RangeKey; onOpenSe
       key: 'relays',
       header: 'Relays',
       align: 'right',
+      hideOnMobile: true,
       sortValue: (r) => r.estimatedRelays,
       render: (r) => formatCompact(r.estimatedRelays),
     },
@@ -172,7 +174,7 @@ export function TrafficTab({ range, onOpenService }: { range: RangeKey; onOpenSe
           title="Traffic Over Time"
           icon={<IconChartLine size={18} />}
           right={
-            <div className="flex items-center gap-2.5">
+            <div className="flex flex-wrap items-center justify-end gap-2.5">
               <CardTag>estimated CU</CardTag>
               <label className="flex cursor-pointer items-center gap-1.5 text-[13px] text-text-secondary">
                 <input

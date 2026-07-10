@@ -114,7 +114,7 @@ export function EconomyTab({ range }: { range: RangeKey }) {
             title="Burn vs Mint"
             icon={<IconFlame size={18} />}
             right={
-              <div className="flex items-center gap-2.5">
+              <div className="flex flex-wrap items-center justify-end gap-2.5">
                 <CardTag>{range} · gross</CardTag>
                 <ChartTypeToggle value={burnMintType} onChange={setBurnMintType} options={['bar', 'line']} />
                 {bm && (

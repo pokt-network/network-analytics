@@ -60,7 +60,7 @@ export function LiveStrip() {
 
   return (
     <div className="border-b bg-bg-card">
-      <div className="mx-auto flex max-w-shell flex-wrap items-center gap-5 px-6 py-[9px] text-[13px]">
+      <div className="mx-auto flex max-w-shell flex-wrap items-center gap-x-5 gap-y-1.5 px-4 py-[9px] text-[13px] sm:px-6">
         <span className="flex items-center gap-1.5 font-medium" style={{ color: dotColor }}>
           <span
             className={`h-[7px] w-[7px] rounded-full ${data && !err && data.healthy ? 'pulse' : ''}`}

@@ -50,7 +50,7 @@ export function ServicesTab({
 
   const columns: Column<ServiceAnalyticsRow>[] = [
     { key: 'service', header: 'Service', sortValue: (r) => r.id, render: (r) => <span className="font-medium text-blue-soft">{r.id}</span> },
-    { key: 'name', header: 'Name', sortValue: (r) => r.name, render: (r) => r.name || '—' },
+    { key: 'name', header: 'Name', sortValue: (r) => r.name, render: (r) => r.name || '—', hideOnMobile: true },
     { key: 'suppliers', header: 'Suppliers', align: 'right', sortValue: (r) => r.suppliers, render: (r) => formatNumber(r.suppliers) },
     { key: 'cu', header: `CU (${range})`, align: 'right', sortValue: (r) => r.cu, render: (r) => formatCompact(r.cu) },
   ];
@@ -128,7 +128,7 @@ export function ServicesTab({
                 title={`${data.info.id} — Volume Trend`}
                 icon={<IconChartLine size={18} />}
                 right={
-                  <div className="flex items-center gap-2.5">
+                  <div className="flex flex-wrap items-center justify-end gap-2.5">
                     <CardTag>{range} · estimated CU</CardTag>
                     <ChartTypeToggle value={volType} onChange={setVolType} options={['line', 'bar']} />
                     <ChartCsvButton

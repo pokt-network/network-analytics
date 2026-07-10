@@ -55,7 +55,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <div className="shell">
             <AppBar />
             <LiveStrip />
-            <main className="mx-auto w-full max-w-shell px-6 pb-16 pt-7">{children}</main>
+            <main className="mx-auto w-full max-w-shell px-4 pb-16 pt-7 sm:px-6">{children}</main>
             <Footer />
           </div>
           <DiagnosticsOverlay />

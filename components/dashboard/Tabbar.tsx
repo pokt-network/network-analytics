@@ -19,7 +19,7 @@ export function Tabbar({
   onChange: (key: string) => void;
 }) {
   return (
-    <div className="flex flex-wrap gap-0.5 border-b" role="tablist">
+    <div className="hidden flex-wrap gap-0.5 border-b sm:flex" role="tablist">
       {tabs.map((t) => {
         const on = t.key === active;
         return (
