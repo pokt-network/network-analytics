@@ -27,7 +27,7 @@ export interface DiagMeta {
 // cached value. On a HIT the stored timestamp returns unchanged → age = now − builtAt = how long ago
 // the warmer (or a user) populated this key. If the cron is firing every 10 min, no key should ever
 // be older than ~10 min. diagJson unwraps the envelope so the client payload shape is untouched.
-interface Envelope<T> {
+export interface Envelope<T> {
   __diagBuiltAt: number;
   data: T;
 }
@@ -43,6 +43,14 @@ export function stamped<T>(build: () => Promise<T>): () => Promise<Envelope<T>> 
     const data = await build();
     return { __diagBuiltAt: Date.now(), data };
   };
+}
+
+/** Re-wrap a stamped envelope around a transformed payload, keeping the original build time.
+ *  Used when a route composes its long-lived cached payload with a separately-cached short-TTL
+ *  fragment: the reported age stays that of the *slow* entry, which is the one the warmer exists to
+ *  keep hot and the one worth watching in the overlay. */
+export function restamp<T, U>(env: Envelope<T>, data: U): Envelope<U> {
+  return { __diagBuiltAt: env.__diagBuiltAt, data };
 }
 
 /**

@@ -1,22 +1,22 @@
 import { type NextRequest } from 'next/server';
 import { unstable_cache } from 'next/cache';
 import { getTrafficSeries, getServicesPerformance, type TrafficSeries, type ServicePerf } from '@/lib/data/traffic';
-import { getRolling24hStats } from '@/lib/data/rewards';
+import { getCachedRolling24hStats, type Rolling24h } from '@/lib/data/rewards';
 import { getLatestSnapshot } from '@/lib/data/snapshots';
 import { getServicesCount } from '@/lib/data/services-meta';
 import { rangeTTL } from '@/lib/timeranges';
 import { DEFAULT_RANGE, isRangeKey, warmTag, type RangeKey } from '@/lib/app-config';
-import { diagJson, stamped } from '@/lib/diagnostics';
+import { diagJson, restamp, stamped } from '@/lib/diagnostics';
 
-export interface TrafficStats {
-  relays24h: number;
-  relays24hChange: number;
-  cu24h: number;
-  cu24hChange: number;
+export interface TrafficStats extends Rolling24h {
   activeServices: number;
   totalServices: number;
   servingSuppliers: number | null;
 }
+
+/** What the range-keyed cache actually stores: everything except the rolling-24h numbers, which are
+ *  cached separately and merged in by the handler (see `getCachedRolling24hStats`). */
+type TrafficBase = Omit<TrafficResponse, 'stats'> & { stats: Omit<TrafficStats, keyof Rolling24h> };
 
 export interface DonutSlice {
   serviceId: string;
@@ -32,21 +32,17 @@ export interface TrafficResponse {
   donut: DonutSlice[];
 }
 
-async function buildTraffic(range: RangeKey): Promise<TrafficResponse> {
-  // 24h stat cards use a fixed rolling window (brief §5.1), independent of the range pills.
-  const [series, performance, rolling, snapshot, totalServices] = await Promise.all([
+async function buildTraffic(range: RangeKey): Promise<TrafficBase> {
+  // Everything here is range-dependent, so it is safe to cache under the range key. The 24h stat
+  // cards are a fixed rolling window (brief §5.1) and are deliberately NOT built here — see GET.
+  const [series, performance, snapshot, totalServices] = await Promise.all([
     getTrafficSeries(range),
     getServicesPerformance(range),
-    getRolling24hStats(),
     getLatestSnapshot(),
     getServicesCount(),
   ]);
 
-  const stats: TrafficStats = {
-    relays24h: rolling.relays24h,
-    relays24hChange: rolling.relays24hChange,
-    cu24h: rolling.cu24h,
-    cu24hChange: rolling.cu24hChange,
+  const stats: TrafficBase['stats'] = {
     activeServices: series.services.length,
     totalServices,
     servingSuppliers: snapshot?.stakedSuppliers ?? null,
@@ -70,10 +66,19 @@ export async function GET(req: NextRequest) {
   const rangeParam = req.nextUrl.searchParams.get('range');
   const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
   // Cache the assembled payload so cold-after-warm loads don't re-hit the slow indexer resolvers.
-  return diagJson('traffic', () =>
-    unstable_cache(stamped(() => buildTraffic(range)), ['traffic', range], {
-      revalidate: rangeTTL(range),
-      tags: warmTag(range),
-    })(),
-  );
+  // The rolling-24h numbers are fetched from their own short-TTL entry and merged in *outside* that
+  // cache: keeping them in it would freeze them for a full rangeTTL (up to 30 min) and give every
+  // range pill its own separately-warmed copy, so the cards would disagree with the live strip and
+  // with each other. Merged here, both surfaces read one entry and cannot drift apart.
+  return diagJson('traffic', async () => {
+    const [cached, rolling] = await Promise.all([
+      unstable_cache(stamped(() => buildTraffic(range)), ['traffic', range], {
+        revalidate: rangeTTL(range),
+        tags: warmTag(range),
+      })(),
+      getCachedRolling24hStats(),
+    ]);
+    const payload: TrafficResponse = { ...cached.data, stats: { ...cached.data.stats, ...rolling } };
+    return restamp(cached, payload);
+  });
 }

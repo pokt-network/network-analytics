@@ -3,9 +3,9 @@ import { getStatus } from '@/lib/metadata';
 import { INDEXER_LAG_THRESHOLD } from '@/lib/config';
 import { NETWORK } from '@/lib/app-config';
 import { getPoktPrice, type PoktPrice } from '@/lib/price';
-import { getRolling24hStats } from '@/lib/data/rewards';
+import { getCachedRolling24hStats } from '@/lib/data/rewards';
 import { getNetInflationPctYr } from '@/lib/data/economy';
-import { diagJson, stamped } from '@/lib/diagnostics';
+import { diagJson, restamp, stamped } from '@/lib/diagnostics';
 
 // Live-strip heartbeat. Server-side so the browser never hits the indexer or CMC directly.
 // Polled by the LiveStrip client every 15s.
@@ -27,11 +27,14 @@ export interface LivePayload {
   netInflation: number | null;
 }
 
-async function buildLive(): Promise<LivePayload> {
-  const [statusRes, priceRes, rollingRes, inflationRes] = await Promise.allSettled([
+/** What the 10s `live` entry stores. The rolling-24h numbers are merged in by the handler from the
+ *  shared entry so the strip and the Traffic cards read the exact same value (see GET). */
+type LiveBase = Omit<LivePayload, 'relays24h' | 'cu24h'>;
+
+async function buildLive(): Promise<LiveBase> {
+  const [statusRes, priceRes, inflationRes] = await Promise.allSettled([
     getStatus(NETWORK),
     getPoktPrice(),
-    getRolling24hStats(),
     getNetInflationPctYr(),
   ]);
 
@@ -47,19 +50,30 @@ async function buildLive(): Promise<LivePayload> {
     block = Number(node?.id ?? lastProcessed);
     healthy = lag <= INDEXER_LAG_THRESHOLD;
   }
-  const rolling = rollingRes.status === 'fulfilled' ? rollingRes.value : null;
-
   return {
     block,
     healthy,
     lag,
     price: priceRes.status === 'fulfilled' ? priceRes.value : null,
-    relays24h: rolling?.relays24h ?? null,
-    cu24h: rolling?.cu24h ?? null,
     netInflation: inflationRes.status === 'fulfilled' ? inflationRes.value : null,
   };
 }
 
 export async function GET() {
-  return diagJson('live', () => unstable_cache(stamped(buildLive), ['live'], { revalidate: LIVE_TTL })());
+  // Read the rolling-24h numbers from their shared entry rather than baking them into the `live`
+  // entry, so the strip and the Traffic 24h cards are literally the same value, not two snapshots
+  // of it taken at different times. Kept non-fatal (as the old allSettled branch was): a rolling
+  // failure blanks those two items instead of failing the whole heartbeat.
+  return diagJson('live', async () => {
+    const [cached, rolling] = await Promise.all([
+      unstable_cache(stamped(buildLive), ['live'], { revalidate: LIVE_TTL })(),
+      getCachedRolling24hStats().catch(() => null),
+    ]);
+    const payload: LivePayload = {
+      ...cached.data,
+      relays24h: rolling?.relays24h ?? null,
+      cu24h: rolling?.cu24h ?? null,
+    };
+    return restamp(cached, payload);
+  });
 }

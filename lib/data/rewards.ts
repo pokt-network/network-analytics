@@ -1,3 +1,4 @@
+import { unstable_cache } from 'next/cache';
 import { gqlFetch } from '@/lib/graphql';
 import { toDate } from '@/lib/time';
 import { NETWORK } from '@/lib/app-config';
@@ -59,11 +60,14 @@ export interface Rolling24h {
 }
 
 /** Trailing 24h vs prior 24h, summed from hourly buckets (estimated = demand signal).
- *  Shared by the Traffic stat cards and the live strip. */
+ *  Prefer `getCachedRolling24hStats` from route handlers so every surface reads one cache entry. */
 export async function getRolling24hStats(): Promise<Rolling24h> {
   const { startISO, endISO } = fixedWindow(48 * 3600);
   const pts = await getRewardsByDate(startISO, endISO, 'hour', 60);
-  const cut = Date.now() - 24 * 3600 * 1000;
+  // Split on the *bucketed* window end, not raw Date.now(). fixedWindow quantizes its edges to
+  // WINDOW_BUCKET_MS; using Date.now() here would drift the cut point up to a bucket away from the
+  // window it is dividing, so the "current" half could be slightly longer than the prior half.
+  const cut = Date.parse(endISO) - 24 * 3600 * 1000;
   let cuCur = 0, cuPrev = 0, rCur = 0, rPrev = 0;
   for (const p of pts) {
     const t = Date.parse(p.date);
@@ -83,3 +87,20 @@ export async function getRolling24hStats(): Promise<Rolling24h> {
     cu24hChange: pct(cuCur, cuPrev),
   };
 }
+
+/** TTL for the shared rolling-24h cache entry. Short enough that the stat cards and the live strip
+ *  both read effectively-live numbers, and cheap to rebuild: the underlying `getRewardsByDate` call
+ *  is itself fetch-cached for 60s against a 60s-bucketed window, so a rebuild inside that bucket is
+ *  just a re-sum of ~48 already-fetched points. */
+export const ROLLING_TTL = 30;
+
+/** The single cache entry every rolling-24h consumer reads.
+ *
+ *  This deliberately lives OUTSIDE the range-keyed `/api/traffic` entry. Composing it inside
+ *  `buildTraffic` would snapshot these numbers into each range's payload — so `24h`, `7d`, `30d`
+ *  and `60d` would each hold their own copy, warmed at different times, and toggling the range pill
+ *  would visibly change values that are supposed to be a fixed rolling window. Route handlers must
+ *  call this alongside their own cached payload and merge the result, never from within it. */
+export const getCachedRolling24hStats = unstable_cache(getRolling24hStats, ['rolling24h'], {
+  revalidate: ROLLING_TTL,
+});
