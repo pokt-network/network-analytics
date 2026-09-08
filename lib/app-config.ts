@@ -16,7 +16,7 @@ export const OWNER_ADDRESS_CAP = 10;
 
 export type RangeKey = '24h' | '7d' | '30d' | '60d';
 export const RANGE_KEYS: RangeKey[] = ['24h', '7d', '30d', '60d'];
-export const DEFAULT_RANGE: RangeKey = '7d';
+export const DEFAULT_RANGE: RangeKey = '30d';
 
 export interface RangeSpec {
   key: RangeKey;
