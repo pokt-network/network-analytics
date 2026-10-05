@@ -3,7 +3,7 @@ import { toDate } from '@/lib/time';
 import { UPOKT_PER_POKT } from '@/lib/config';
 import { NETWORK, type RangeKey } from '@/lib/app-config';
 import { rangeWindow, rangeTTL } from '@/lib/timeranges';
-import { SERVICES_LIST_PAGE, RELAYS_BY_SERVICE_PER_POINT } from '@/lib/queries/analytics';
+import { SERVICES_LIST, RELAYS_BY_SERVICE_PER_POINT } from '@/lib/queries/analytics';
 import { getServicesPerformance } from './traffic';
 import { num, parseScalar } from './_util';
 
@@ -12,14 +12,12 @@ export interface ServiceListItem {
   name: string;
 }
 
-/** All services (id + label) for the picker. Connection caps at 100 → two offset pages cover ~173. */
+/** All services (id + label) for the picker, in one page (two pages of 100 cut the list at 200). */
 export async function getServicesList(): Promise<ServiceListItem[]> {
-  const page = (offset: number) =>
-    gqlFetch<{ services: { nodes: ServiceListItem[] } }>(NETWORK, SERVICES_LIST_PAGE, { offset }, { revalidate: 12 * 3600 });
-  const [p0, p1] = await Promise.all([page(0), page(100)]);
+  const data = await gqlFetch<{ services: { nodes: ServiceListItem[] } }>(NETWORK, SERVICES_LIST, undefined, { revalidate: 12 * 3600 });
   const seen = new Set<string>();
   const out: ServiceListItem[] = [];
-  for (const n of [...(p0.services?.nodes ?? []), ...(p1.services?.nodes ?? [])]) {
+  for (const n of data.services?.nodes ?? []) {
     if (n?.id && !seen.has(n.id)) {
       seen.add(n.id);
       out.push({ id: n.id, name: n.name || n.id });

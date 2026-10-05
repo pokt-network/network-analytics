@@ -94,10 +94,10 @@ export const TOKENOMICS_PARAM = /* GraphQL */ `
   }
 `;
 
-// Services list (id + label) for the Services picker. Connection caps at 100 → paginate with offset.
-export const SERVICES_LIST_PAGE = /* GraphQL */ `
-  query servicesListPage($offset: Int) {
-    services(first: 100, offset: $offset, orderBy: ID_ASC) {
+// Services list (id + label) for the Services picker. The indexer returns up to 1000 rows per page.
+export const SERVICES_LIST = /* GraphQL */ `
+  query servicesList {
+    services(first: 1000, orderBy: ID_ASC) {
       nodes {
         id
         name
