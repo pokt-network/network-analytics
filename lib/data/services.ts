@@ -14,7 +14,11 @@ export interface ServiceListItem {
 
 /** All services (id + label) for the picker, in one page (two pages of 100 cut the list at 200). */
 export async function getServicesList(): Promise<ServiceListItem[]> {
-  const data = await gqlFetch<{ services: { nodes: ServiceListItem[] } }>(NETWORK, SERVICES_LIST, undefined, { revalidate: 12 * 3600 });
+  const data = await gqlFetch<{ services: { totalCount: number; nodes: ServiceListItem[] } }>(NETWORK, SERVICES_LIST, undefined, { revalidate: 12 * 3600 });
+  const fetched = data.services?.nodes?.length ?? 0;
+  if ((data.services?.totalCount ?? 0) > fetched) {
+    console.warn(`services list: the indexer has ${data.services.totalCount} services, only the first ${fetched} are listed`);
+  }
   const seen = new Set<string>();
   const out: ServiceListItem[] = [];
   for (const n of data.services?.nodes ?? []) {
