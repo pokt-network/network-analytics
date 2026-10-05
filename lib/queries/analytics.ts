@@ -57,12 +57,18 @@ export const DOMAINS_DISTINCT = /* GraphQL */ `
   }
 `;
 
-// Aggregate supplier count + staked tokens across the passed domains (call once per domain for rows).
-export const SUPPLIER_STATS_BY_DOMAINS = /* GraphQL */ `
-  query supplierStatsByDomains($domains: [String]) {
-    getSupplierStatsByDomains(pDomains: $domains)
+// Aggregate supplier count + staked tokens across the passed domains. The resolver sums every domain it
+// is given into one result, so per-domain rows need one call per domain: they go as aliases d0, d1, …
+// of a single request.
+export function supplierStatsByDomainsQuery(count: number): string {
+  const vars = Array.from({ length: count }, (_, i) => `$d${i}: [String]`).join(', ');
+  const fields = Array.from({ length: count }, (_, i) => `d${i}: getSupplierStatsByDomains(pDomains: $d${i})`).join('\n    ');
+  return /* GraphQL */ `
+  query supplierStatsByDomains(${vars}) {
+    ${fields}
   }
 `;
+}
 
 export const TOTAL_SUPPLY_BY_DAY = /* GraphQL */ `
   query totalSupplyByDay($start: Datetime, $end: Datetime) {

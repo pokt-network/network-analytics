@@ -1,12 +1,13 @@
 import { gqlFetch } from '@/lib/graphql';
 import { NETWORK } from '@/lib/app-config';
 import { UPOKT_PER_POKT } from '@/lib/config';
-import { DOMAINS_DISTINCT, SUPPLIER_STATS_BY_DOMAINS } from '@/lib/queries/analytics';
+import { DOMAINS_DISTINCT, supplierStatsByDomainsQuery } from '@/lib/queries/analytics';
 import { num } from './_util';
 
 // Suppliers by-domain (aggregate). Distinct domains come from domainServiceDailyRewards grouped by
 // DOMAIN (§9.1 resolution — domains are derived from supplier serviceConfig endpoint hosts). Then
-// getSupplierStatsByDomains([domain]) is called once per domain for accurate distinct counts + stake.
+// getSupplierStatsByDomains([domain]) is called once per domain (as aliases of one request) for accurate
+// distinct counts + stake.
 
 interface DomainGroup {
   keys: string[] | null;
@@ -43,20 +44,23 @@ export interface DomainRow {
   sharePct: number; // share of total staked across tracked domains
 }
 
-async function statDomain(domain: string): Promise<{ domain: string; suppliers: number; stakedUpokt: number }> {
-  const data = await gqlFetch<{ getSupplierStatsByDomains: DomainStatRaw | null }>(
+async function statDomains(domains: string[]): Promise<Array<{ domain: string; suppliers: number; stakedUpokt: number }>> {
+  if (domains.length === 0) return [];
+  const data = await gqlFetch<Record<string, DomainStatRaw | null>>(
     NETWORK,
-    SUPPLIER_STATS_BY_DOMAINS,
-    { domains: [domain] },
+    supplierStatsByDomainsQuery(domains.length),
+    Object.fromEntries(domains.map((d, i) => [`d${i}`, [d]])),
     { revalidate: 6 * 3600 },
   );
-  const s = data.getSupplierStatsByDomains;
-  return { domain, suppliers: num(s?.suppliers_count), stakedUpokt: num(s?.total_staked_tokens) };
+  return domains.map((domain, i) => {
+    const s = data[`d${i}`];
+    return { domain, suppliers: num(s?.suppliers_count), stakedUpokt: num(s?.total_staked_tokens) };
+  });
 }
 
 export async function getDomainTable(): Promise<DomainRow[]> {
   const domains = await getDistinctDomains();
-  const stats = await Promise.all(domains.map(statDomain));
+  const stats = await statDomains(domains);
   const totalStakedUpokt = stats.reduce((s, d) => s + d.stakedUpokt, 0) || 1;
   const rows: DomainRow[] = stats.map((d) => ({
     domain: d.domain,
