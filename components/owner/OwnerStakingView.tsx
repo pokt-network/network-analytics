@@ -17,8 +17,8 @@ import { TimeSeriesChart, type SeriesDef } from '@/components/charts/TimeSeriesC
 import { ChartSkeleton, EmptyState, ErrorState } from '@/components/ui/states';
 
 const PAGE_SIZE = 25;
-// CSV export walks the indexer 1000 rows at a time (its page cap). A single owner can have ~1M
-// settlements and deep OFFSET paging degrades sharply, so cap the export at the most-recent N. 5,000
+// CSV export walks the indexer 1000 rows at a time (its page cap), each page after the previous one's
+// cursor. A single owner can have ~1M settlements, so cap the export at the most-recent N. 5,000
 // rows = 5 chunked requests — enough for meaningful analysis without hammering the indexer.
 const EXPORT_CAP = 5000;
 const EXPORT_CHUNK = 1000;
@@ -63,9 +63,10 @@ export function OwnerStakingView() {
   }
 
   // CSV export: the table is server-paginated, so walk pages (1000/req — the indexer's cap) and
-  // assemble the history before downloading. Ordered newest-first (BLOCK_ID_DESC). A single owner can
-  // have ~1M settlements and deep OFFSET paging degrades fast, so the export is capped at the
-  // most-recent EXPORT_CAP rows and the truncation is surfaced, never silent. Amounts export as plain
+  // assemble the history before downloading. Ordered newest-first (block, then id); each page is read
+  // after the previous page's cursor, so settlements indexed meanwhile neither repeat nor drop rows. A
+  // single owner can have ~1M settlements, so the export is capped at the most-recent EXPORT_CAP rows
+  // and the truncation is surfaced, never silent. Amounts export as plain
   // POKT numbers (no separators) so they parse cleanly in Excel/pandas.
   async function exportIssuancesCsv() {
     if (exporting || addresses.length === 0) return;
@@ -73,17 +74,18 @@ export function OwnerStakingView() {
     setExportNote(null);
     try {
       const all: Issuance[] = [];
-      let p = 1;
+      let after: string | null = null;
       let total = Infinity;
       while (all.length < total && all.length < EXPORT_CAP) {
-        // the total is counted once, on the first page
-        const res = await fetch(`/api/owner/issuances?addresses=${addrParam}&page=${p}&pageSize=${EXPORT_CHUNK}${p > 1 ? '&count=0' : ''}`);
+        // the total is counted once, on the first page; the next pages follow the previous one's cursor
+        const next: string = after ? `&after=${encodeURIComponent(after)}&count=0` : '';
+        const res = await fetch(`/api/owner/issuances?addresses=${addrParam}&pageSize=${EXPORT_CHUNK}${next}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: IssuancePage = await res.json();
-        if (p === 1) total = data.totalCount ?? 0;
+        if (!after) total = data.totalCount ?? 0;
         all.push(...data.rows);
-        if (data.rows.length === 0) break; // safety: nothing more to page through
-        p++;
+        if (data.rows.length === 0 || !data.endCursor) break; // safety: nothing more to page through
+        after = data.endCursor;
       }
       const rows = all.slice(0, EXPORT_CAP);
       const headers = ['Block', 'Service', 'Owner', 'Relays', 'Settled (POKT)', 'Minted (POKT)', 'Mint Ratio', 'Transaction'];

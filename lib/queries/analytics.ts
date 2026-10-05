@@ -129,12 +129,17 @@ export const REWARDS_BY_DATE_GROUPED = /* GraphQL */ `
 `;
 
 // eventClaimSettleds: 23.2M rows — ALWAYS filter (by owner) + paginate. transactionId can be null.
-// ID_DESC orders the rows of one block, so OFFSET pages neither repeat nor skip rows. totalCount counts
-// every settlement of the owners (seconds for a large owner), so it is only fetched when asked for.
+// ID_DESC orders the rows of one block, so the order is total. A walk over many pages (the CSV export)
+// passes `after` = the previous page's endCursor, a keyset on (block, id): a settlement indexed meanwhile
+// cannot shift the rows as it does with OFFSET (which then repeats and drops rows across pages). totalCount
+// counts every settlement of the owners (seconds for a large owner), so it is only fetched when asked for.
 export const EVENT_CLAIM_SETTLEDS = /* GraphQL */ `
-  query eventClaimSettleds($owners: [String!], $first: Int, $offset: Int, $withCount: Boolean!) {
-    eventClaimSettleds(filter: { supplierOwnerId: { in: $owners } }, orderBy: [BLOCK_ID_DESC, ID_DESC], first: $first, offset: $offset) {
+  query eventClaimSettleds($owners: [String!], $first: Int, $offset: Int, $after: Cursor, $withCount: Boolean!) {
+    eventClaimSettleds(filter: { supplierOwnerId: { in: $owners } }, orderBy: [BLOCK_ID_DESC, ID_DESC], first: $first, offset: $offset, after: $after) {
       totalCount @include(if: $withCount)
+      pageInfo {
+        endCursor
+      }
       nodes {
         serviceId
         numRelays

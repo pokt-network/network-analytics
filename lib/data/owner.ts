@@ -103,18 +103,27 @@ export interface Issuance {
 export interface IssuancePage {
   rows: Issuance[];
   totalCount?: number; // absent when the caller asked for no count
+  endCursor?: string | null; // pass as `after` to read the rows that follow this page
 }
 
-export async function getOwnerIssuances(addresses: string[], page: number, pageSize = 25, withCount = true): Promise<IssuancePage> {
-  const data = await gqlFetch<{ eventClaimSettleds: { totalCount?: number; nodes: SettleRaw[] } }>(
+/** One page of settlements, newest first: by page number (offset), or the rows after `after` (a cursor). */
+export async function getOwnerIssuances(
+  addresses: string[],
+  page: number,
+  pageSize = 25,
+  withCount = true,
+  after: string | null = null,
+): Promise<IssuancePage> {
+  const data = await gqlFetch<{ eventClaimSettleds: { totalCount?: number; pageInfo: { endCursor: string | null }; nodes: SettleRaw[] } }>(
     NETWORK,
     EVENT_CLAIM_SETTLEDS,
-    { owners: addresses, first: pageSize, offset: (page - 1) * pageSize, withCount },
+    { owners: addresses, first: pageSize, offset: after ? null : (page - 1) * pageSize, after, withCount },
     { revalidate: 30 },
   );
   const d = data.eventClaimSettleds;
   return {
     totalCount: withCount ? (d?.totalCount ?? 0) : undefined,
+    endCursor: d?.pageInfo?.endCursor ?? null,
     rows: (d?.nodes ?? []).map((n) => ({
       block: num(n.blockId),
       serviceId: n.serviceId,

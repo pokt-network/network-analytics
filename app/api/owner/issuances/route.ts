@@ -24,10 +24,12 @@ export async function GET(req: NextRequest) {
   const pageSize = Number.isFinite(reqSize) && reqSize > 0 ? Math.min(reqSize, MAX_PAGE_SIZE) : PAGE_SIZE;
   // count=0 skips totalCount (the export reads it from its first page only).
   const withCount = req.nextUrl.searchParams.get('count') !== '0';
+  // after=<endCursor of the previous page> reads the rows that follow it (the export), instead of `page`.
+  const after = req.nextUrl.searchParams.get('after') || null;
 
   if (addresses.length === 0) {
     return NextResponse.json({ rows: [], totalCount: 0 } satisfies IssuancePage);
   }
-  const result = await getOwnerIssuances(addresses, page, pageSize, withCount);
+  const result = await getOwnerIssuances(addresses, page, pageSize, withCount, after);
   return NextResponse.json(result);
 }
