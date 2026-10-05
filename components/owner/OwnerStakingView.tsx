@@ -17,11 +17,11 @@ import { TimeSeriesChart, type SeriesDef } from '@/components/charts/TimeSeriesC
 import { ChartSkeleton, EmptyState } from '@/components/ui/states';
 
 const PAGE_SIZE = 25;
-// CSV export walks the indexer 100 rows at a time (its hard page cap). A single owner can have ~1M
+// CSV export walks the indexer 1000 rows at a time (its page cap). A single owner can have ~1M
 // settlements and deep OFFSET paging degrades sharply, so cap the export at the most-recent N. 5,000
-// rows = ~50 chunked requests — enough for meaningful analysis without hammering the indexer.
+// rows = 5 chunked requests — enough for meaningful analysis without hammering the indexer.
 const EXPORT_CAP = 5000;
-const EXPORT_CHUNK = 100;
+const EXPORT_CHUNK = 1000;
 
 export function OwnerStakingView() {
   const [addresses, setAddresses] = useState<string[]>([]);
@@ -62,7 +62,7 @@ export function OwnerStakingView() {
     setDropped(0);
   }
 
-  // CSV export: the table is server-paginated, so walk pages (100/req — the indexer's cap) and
+  // CSV export: the table is server-paginated, so walk pages (1000/req — the indexer's cap) and
   // assemble the history before downloading. Ordered newest-first (BLOCK_ID_DESC). A single owner can
   // have ~1M settlements and deep OFFSET paging degrades fast, so the export is capped at the
   // most-recent EXPORT_CAP rows and the truncation is surfaced, never silent. Amounts export as plain
@@ -76,10 +76,11 @@ export function OwnerStakingView() {
       let p = 1;
       let total = Infinity;
       while (all.length < total && all.length < EXPORT_CAP) {
-        const res = await fetch(`/api/owner/issuances?addresses=${addrParam}&page=${p}&pageSize=${EXPORT_CHUNK}`);
+        // the total is counted once, on the first page
+        const res = await fetch(`/api/owner/issuances?addresses=${addrParam}&page=${p}&pageSize=${EXPORT_CHUNK}${p > 1 ? '&count=0' : ''}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: IssuancePage = await res.json();
-        total = data.totalCount ?? 0;
+        if (p === 1) total = data.totalCount ?? 0;
         all.push(...data.rows);
         if (data.rows.length === 0) break; // safety: nothing more to page through
         p++;

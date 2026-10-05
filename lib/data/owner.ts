@@ -102,19 +102,19 @@ export interface Issuance {
 
 export interface IssuancePage {
   rows: Issuance[];
-  totalCount: number;
+  totalCount?: number; // absent when the caller asked for no count
 }
 
-export async function getOwnerIssuances(addresses: string[], page: number, pageSize = 25): Promise<IssuancePage> {
-  const data = await gqlFetch<{ eventClaimSettleds: { totalCount: number; nodes: SettleRaw[] } }>(
+export async function getOwnerIssuances(addresses: string[], page: number, pageSize = 25, withCount = true): Promise<IssuancePage> {
+  const data = await gqlFetch<{ eventClaimSettleds: { totalCount?: number; nodes: SettleRaw[] } }>(
     NETWORK,
     EVENT_CLAIM_SETTLEDS,
-    { owners: addresses, first: pageSize, offset: (page - 1) * pageSize },
+    { owners: addresses, first: pageSize, offset: (page - 1) * pageSize, withCount },
     { revalidate: 30 },
   );
   const d = data.eventClaimSettleds;
   return {
-    totalCount: d?.totalCount ?? 0,
+    totalCount: withCount ? (d?.totalCount ?? 0) : undefined,
     rows: (d?.nodes ?? []).map((n) => ({
       block: num(n.blockId),
       serviceId: n.serviceId,

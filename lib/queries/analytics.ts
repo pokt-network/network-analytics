@@ -127,10 +127,12 @@ export const REWARDS_BY_DATE_GROUPED = /* GraphQL */ `
 `;
 
 // eventClaimSettleds: 23.2M rows — ALWAYS filter (by owner) + paginate. transactionId can be null.
+// ID_DESC orders the rows of one block, so OFFSET pages neither repeat nor skip rows. totalCount counts
+// every settlement of the owners (seconds for a large owner), so it is only fetched when asked for.
 export const EVENT_CLAIM_SETTLEDS = /* GraphQL */ `
-  query eventClaimSettleds($owners: [String!], $first: Int, $offset: Int) {
-    eventClaimSettleds(filter: { supplierOwnerId: { in: $owners } }, orderBy: BLOCK_ID_DESC, first: $first, offset: $offset) {
-      totalCount
+  query eventClaimSettleds($owners: [String!], $first: Int, $offset: Int, $withCount: Boolean!) {
+    eventClaimSettleds(filter: { supplierOwnerId: { in: $owners } }, orderBy: [BLOCK_ID_DESC, ID_DESC], first: $first, offset: $offset) {
+      totalCount @include(if: $withCount)
       nodes {
         serviceId
         numRelays
