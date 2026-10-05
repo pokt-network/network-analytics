@@ -28,9 +28,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ addresses, totalPokt: 0, rewards: { rows: [], addresses: [], grouped: groupAll } });
   }
 
-  const [totalPokt, rewards] = await Promise.all([
-    getOwnerTotal(addresses, range),
-    getOwnerRewards(addresses, range, groupAll),
-  ]);
-  return NextResponse.json({ addresses, totalPokt, rewards } satisfies OwnerResponse);
+  try {
+    const [totalPokt, rewards] = await Promise.all([
+      getOwnerTotal(addresses, range),
+      getOwnerRewards(addresses, range, groupAll),
+    ]);
+    return NextResponse.json({ addresses, totalPokt, rewards } satisfies OwnerResponse);
+  } catch (e) {
+    // The settlement functions raise for a range the indexer has not written yet, rather than return 0.
+    return NextResponse.json({ error: (e as Error).message }, { status: 502 });
+  }
 }

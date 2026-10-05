@@ -14,7 +14,7 @@ import { StatCard } from '@/components/ui/StatCard';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { RangePills } from '@/components/dashboard/RangePills';
 import { TimeSeriesChart, type SeriesDef } from '@/components/charts/TimeSeriesChart';
-import { ChartSkeleton, EmptyState } from '@/components/ui/states';
+import { ChartSkeleton, EmptyState, ErrorState } from '@/components/ui/states';
 
 const PAGE_SIZE = 25;
 // CSV export walks the indexer 1000 rows at a time (its page cap). A single owner can have ~1M
@@ -194,7 +194,9 @@ export function OwnerStakingView() {
                 </div>
               }
             />
-            {!rewards.data ? (
+            {rewards.error ? (
+              <ErrorState>Couldn’t load rewards: {rewards.error}</ErrorState>
+            ) : !rewards.data ? (
               <ChartSkeleton height={280} />
             ) : rewards.data.rewards.rows.length === 0 ? (
               <EmptyState>No rewards in this window.</EmptyState>
