@@ -2,7 +2,7 @@ import { gqlFetch } from '@/lib/graphql';
 import { toDate } from '@/lib/time';
 import { NETWORK } from '@/lib/app-config';
 import { UPOKT_PER_POKT } from '@/lib/config';
-import { fixedWindow } from '@/lib/timeranges';
+import { dayWindow } from '@/lib/timeranges';
 import { TOTAL_SUPPLY_BY_DAY, SUPPLY_COMPOSITION, TOKENOMICS_PARAM } from '@/lib/queries/analytics';
 import { getRewardsByDate } from './rewards';
 import { num, parseScalar } from './_util';
@@ -31,10 +31,10 @@ export async function getSupplyHistory(startISO: string, endISO: string, revalid
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
-/** Net inflation %/yr from the authoritative total_supply delta over a fixed 30d window (cheap,
+/** Net inflation %/yr from the authoritative total_supply delta over a 30-day window (cheap,
  *  captures true net regardless of mint/burn regime). Deflationary → negative. */
 export async function getNetInflationPctYr(): Promise<number> {
-  const { startISO, endISO } = fixedWindow(30 * 86400);
+  const { startISO, endISO } = dayWindow(30);
   const pts = await getSupplyHistory(startISO, endISO, 3600);
   if (pts.length < 2) return 0;
   const first = pts[0];
@@ -95,7 +95,7 @@ export interface CompSlice {
 }
 
 export async function getComposition(): Promise<CompSlice[]> {
-  const { startISO, endISO } = fixedWindow(3 * 86400);
+  const { startISO, endISO } = dayWindow(3);
   const data = await gqlFetch<{ getSupplyCompositionBetweenDates: unknown }>(
     NETWORK,
     SUPPLY_COMPOSITION,
