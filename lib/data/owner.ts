@@ -32,25 +32,25 @@ export interface OwnerRewards {
 export async function getOwnerRewards(addresses: string[], range: RangeKey, groupAll: boolean): Promise<OwnerRewards> {
   const w = rangeWindow(range);
   if (groupAll) {
-    const data = await gqlFetch<{ getRewardsByAddressesAndTimeGroupByDate: unknown }>(
+    const data = await gqlFetch<{ legacyRewardsByAddressesAndTimeGroupByDate: unknown }>(
       NETWORK,
       REWARDS_BY_DATE_GROUPED,
       { addresses, start: w.startISO, end: w.endISO, interval: w.interval },
       { revalidate: rangeTTL(range) },
     );
-    const rows = parseScalar<DateRaw[]>(data.getRewardsByAddressesAndTimeGroupByDate)
+    const rows = parseScalar<DateRaw[]>(data.legacyRewardsByAddressesAndTimeGroupByDate)
       .map((r) => ({ date: toDate(r.date_truncated)?.toISOString() ?? r.date_truncated, total: toPokt(num(r.total_amount)) }))
       .sort((a, b) => String(a.date).localeCompare(String(b.date)));
     return { rows, addresses: ['total'], grouped: true };
   }
 
-  const data = await gqlFetch<{ getRewardsByAddressesAndTimeGroupByAddressAndDate: unknown }>(
+  const data = await gqlFetch<{ legacyRewardsByAddressesAndTimeGroupByAddressAndDate: unknown }>(
     NETWORK,
     REWARDS_BY_ADDRESS_DATE,
     { addresses, start: w.startISO, end: w.endISO, interval: w.interval },
     { revalidate: rangeTTL(range) },
   );
-  const raw = parseScalar<AddrDateRaw[]>(data.getRewardsByAddressesAndTimeGroupByAddressAndDate);
+  const raw = parseScalar<AddrDateRaw[]>(data.legacyRewardsByAddressesAndTimeGroupByAddressAndDate);
   const byDate = new Map<string, Record<string, number | string>>();
   const addrSet = new Set<string>();
   for (const r of raw) {
@@ -69,13 +69,13 @@ export async function getOwnerRewards(addresses: string[], range: RangeKey, grou
 
 export async function getOwnerTotal(addresses: string[], range: RangeKey): Promise<number> {
   const w = rangeWindow(range);
-  const data = await gqlFetch<{ getRewardsByAddressesAndTime: unknown }>(
+  const data = await gqlFetch<{ legacyRewardsByAddressesAndTime: unknown }>(
     NETWORK,
     REWARDS_BY_ADDRESSES_TIME,
     { addresses, start: w.startISO, end: w.endISO },
     { revalidate: rangeTTL(range) },
   );
-  return toPokt(num(data.getRewardsByAddressesAndTime)); // scalar BigFloat (upokt) as string
+  return toPokt(num(data.legacyRewardsByAddressesAndTime)); // scalar BigFloat (upokt) as string
 }
 
 interface SettleRaw {

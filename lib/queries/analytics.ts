@@ -101,21 +101,22 @@ export const SERVICES_LIST_PAGE = /* GraphQL */ `
 `;
 
 // ── Owner Staking (addresses are [String]) ──
+// legacy* = the getRewardsByAddressesAndTime* arguments and JSON, read from the settlement tables.
 export const REWARDS_BY_ADDRESSES_TIME = /* GraphQL */ `
   query rewardsByAddressesTime($addresses: [String], $start: Datetime, $end: Datetime) {
-    getRewardsByAddressesAndTime(addresses: $addresses, startDate: $start, endDate: $end)
+    legacyRewardsByAddressesAndTime(addresses: $addresses, startDate: $start, endDate: $end)
   }
 `;
 
 export const REWARDS_BY_ADDRESS_DATE = /* GraphQL */ `
   query rewardsByAddressDate($addresses: [String], $start: Datetime, $end: Datetime, $interval: String) {
-    getRewardsByAddressesAndTimeGroupByAddressAndDate(addresses: $addresses, startDate: $start, endDate: $end, truncInterval: $interval)
+    legacyRewardsByAddressesAndTimeGroupByAddressAndDate(addresses: $addresses, startDate: $start, endDate: $end, truncInterval: $interval)
   }
 `;
 
 export const REWARDS_BY_DATE_GROUPED = /* GraphQL */ `
   query rewardsByDateGrouped($addresses: [String], $start: Datetime, $end: Datetime, $interval: String) {
-    getRewardsByAddressesAndTimeGroupByDate(addresses: $addresses, startDate: $start, endDate: $end, truncInterval: $interval)
+    legacyRewardsByAddressesAndTimeGroupByDate(addresses: $addresses, startDate: $start, endDate: $end, truncInterval: $interval)
   }
 `;
 
