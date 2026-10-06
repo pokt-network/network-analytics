@@ -24,11 +24,11 @@ export async function getServicesList(): Promise<ServiceListItem[]> {
       console.warn(`services list: stopped after ${page} pages (${nodes.length} rows), the rest is not listed`);
       break;
     }
+    // No per-page fetch cache: the route's unstable_cache keeps the whole walk, so the list is one snapshot.
     const data: { services: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: ServiceListItem[] } } = await gqlFetch(
       NETWORK,
       SERVICES_LIST,
       { after },
-      { revalidate: 12 * 3600 },
     );
     nodes.push(...(data.services?.nodes ?? []));
     after = data.services?.pageInfo?.endCursor ?? null;

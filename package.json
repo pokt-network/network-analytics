@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --import ./test/register.mjs --test test/*.test.mjs",
+    "test": "node --experimental-strip-types --import ./test/register.mjs --test test/*.test.mjs",
     "sync-vendor": "node scripts/sync-vendor.mjs",
     "sync-vendor:check": "node scripts/sync-vendor.mjs --check",
     "precompute": "node scripts/precompute-economics.mjs"
