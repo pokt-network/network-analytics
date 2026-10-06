@@ -54,6 +54,8 @@ test('rangeNote: late start, early end (inclusive for legacy, exclusive for the 
   assert.equal(rangeNote(L(legacy), 'day'), 'Data since 2026-09-01 until 2026-09-20; gaps: 2026-09-05 – 2026-09-07');
   assert.equal(rangeNote(L(full), 'day'), null);
   assert.equal(rangeNote(null, 'day'), null);
+  // an unbounded start (a lifetime catalog range) is not a late start
+  assert.equal(rangeNote(C({ ...full, requested_from: null }), 'week'), null);
   // an inclusive end at midnight is that day; an exclusive one is the day before
   const behind = { ...full, covered_to: '2026-09-20T00:00:00+00:00' };
   assert.equal(rangeNote(L(behind), 'day'), 'Data until 2026-09-20');

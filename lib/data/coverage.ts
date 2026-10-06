@@ -83,7 +83,8 @@ export function rangeNote(range: CoverageRange | null, interval?: 'hour' | 'day'
     return fine ? `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC` : iso.slice(0, 10);
   };
   const parts: string[] = [];
-  if (!(p.coveredFrom <= p.requestedFrom)) parts.push(`Data since ${at(p.coveredFrom)}`);
+  // an unbounded start (requested_from null) asked for whatever exists, so starting late is not a shortfall
+  if (!Number.isNaN(p.requestedFrom) && !(p.coveredFrom <= p.requestedFrom)) parts.push(`Data since ${at(p.coveredFrom)}`);
   if (p.coveredTo < p.requestedTo - COVERAGE_END_SLACK_MS) {
     parts.push(`${parts.length ? 'until' : 'Data until'} ${at(p.coveredTo, !range.end_inclusive)}`);
   }

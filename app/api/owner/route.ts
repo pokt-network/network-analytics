@@ -37,7 +37,8 @@ export async function GET(req: NextRequest) {
     ]);
     return NextResponse.json({ addresses, totalPokt: total.totalPokt, totalRange: total.range, rewards } satisfies OwnerResponse);
   } catch (e) {
-    // An indexer without the range contract raises for a range it has not written yet, rather than return 0.
+    // An indexer without the range contract raises for a range it has not written yet; one with it still raises when
+    // its rollups are stale. Either way the view shows the reason.
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });
   }
 }
