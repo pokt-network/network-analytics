@@ -1,5 +1,6 @@
 // The legacy* fields in both shapes: the bare value (older indexers) and {range, data} (newer ones).
-// Fixtures follow the indexer's documented examples (partial coverage, a gap, a range before coverage).
+// Fixtures follow the indexer's documented examples (partial coverage, a gap, nothing covered); gaps and the covered
+// end are half-open like the range, as the indexer's _coverage builds them.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseScalar, unwrapRange, rangeNote } from '../lib/data/_util.ts';
@@ -37,14 +38,24 @@ test('new shape: data and range, also when double-encoded as a JSON string', () 
 });
 
 test('new shape, nothing covered: data stays null, never 0', () => {
-  const before = { ...partial, requested_to: '2026-09-01T00:00:00+00:00', covered_to: '2026-09-01T00:00:00+00:00', gaps: [] };
-  assert.deepEqual(unwrapRange({ range: before, data: null }), { data: null, range: before });
+  const none = { ...partial, covered_from: null, covered_to: null, gaps: [] };
+  assert.deepEqual(unwrapRange({ range: none, data: null }), { data: null, range: none });
 });
 
-test('rangeNote: the covered start and the gaps, only when less than asked was covered', () => {
-  assert.equal(rangeNote(partial), 'Data since 2026-09-01; gaps: 2026-09-01 – 2026-09-02');
-  assert.equal(rangeNote({ ...partial, gaps: [] }), 'Data since 2026-09-01');
+test('rangeNote: a late start, an early end and the gaps (half-open), only when less than asked was covered', () => {
+  // the example: history from 09-01 12:00, indexer head at 09-02 08:20, a half-hour gap
+  assert.equal(rangeNote(partial), 'Data since 2026-09-01 until 2026-09-02; gaps: 2026-09-01');
+  assert.equal(rangeNote({ ...partial, covered_to: partial.requested_to, gaps: [] }), 'Data since 2026-09-01');
   assert.equal(rangeNote({ ...full, gaps: [{ from: '2026-09-02T01:00:00+00:00', to: '2026-09-02T02:00:00+00:00' }] }), 'gaps: 2026-09-02');
+  assert.equal(rangeNote({ ...full, gaps: [{ from: '2026-09-01T23:00:00+00:00', to: '2026-09-02T00:00:01+00:00' }] }), 'gaps: 2026-09-01 – 2026-09-02');
+  assert.equal(rangeNote({ ...full, gaps: [{ from: null, to: '2026-09-02T05:00:00+00:00' }] }), 'gaps: … – 2026-09-02');
+  // a writer behind: the covered end is hours short of the window's end
+  assert.equal(rangeNote({ ...full, covered_to: '2026-09-02T12:00:00+00:00' }), 'Data until 2026-09-02');
+  assert.equal(rangeNote({ ...partial, covered_to: '2026-09-02T00:00:00+00:00', gaps: [] }), 'Data since 2026-09-01 until 2026-09-01');
+  // the indexer's normal lag behind now is not a note
+  assert.equal(rangeNote({ ...full, covered_to: '2026-09-02T23:59:00+00:00' }), null);
+  assert.equal(rangeNote({ ...full, covered_from: null, covered_to: null }), 'No data indexed for this window yet');
+  assert.equal(rangeNote({ ...full, covered_from: 'infinity' }), 'Data since …');
   assert.equal(rangeNote(full), null);
   assert.equal(rangeNote(null), null);
 });
