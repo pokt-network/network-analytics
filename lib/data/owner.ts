@@ -9,7 +9,7 @@ import {
   REWARDS_BY_DATE_GROUPED,
   EVENT_CLAIM_SETTLEDS,
 } from '@/lib/queries/analytics';
-import { num, parseScalar, unwrapRange, type CoverageRange } from './_util';
+import { num, parseScalar, unwrapRange, notCovered, type CoverageRange } from './_util';
 
 const toPokt = (u: number) => u / UPOKT_PER_POKT;
 
@@ -80,8 +80,8 @@ export async function getOwnerTotal(addresses: string[], range: RangeKey): Promi
     { revalidate: rangeTTL(range) },
   );
   // upokt: a BigFloat string from an older indexer, a JSON {range, data} from a newer one.
-  const total = unwrapRange<number | string>(parseScalar(data.legacyRewardsByAddressesAndTime)).data;
-  return total === null ? null : toPokt(num(total));
+  const total = unwrapRange<number | string>(parseScalar(data.legacyRewardsByAddressesAndTime));
+  return notCovered(total.range) ? null : toPokt(num(total.data));
 }
 
 interface SettleRaw {

@@ -3,7 +3,7 @@
 // end are half-open like the range, as the indexer's _coverage builds them.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseScalar, unwrapRange, rangeNote } from '../lib/data/_util.ts';
+import { parseScalar, unwrapRange, notCovered, rangeNote } from '../lib/data/_util.ts';
 
 const partial = {
   requested_from: '2026-08-31T00:00:00+00:00',
@@ -37,9 +37,15 @@ test('new shape: data and range, also when double-encoded as a JSON string', () 
   assert.deepEqual(unwrapRange({ range: partial, data: 201156529 }), { data: 201156529, range: partial });
 });
 
-test('new shape, nothing covered: data stays null, never 0', () => {
+test('new shape, nothing covered: told by the null covered bounds, whatever data is', () => {
   const none = { ...partial, covered_from: null, covered_to: null, gaps: [] };
-  assert.deepEqual(unwrapRange({ range: none, data: null }), { data: null, range: none });
+  assert.deepEqual(unwrapRange({ range: none, data: null }), { data: null, range: none }); // legacy_*
+  assert.deepEqual(unwrapRange({ range: none, data: [] }), { data: [], range: none }); // get…Json
+  assert.equal(notCovered(none), true);
+  // covered, with no income: 0 (or a null date series) is data, not "not covered"
+  assert.equal(notCovered(unwrapRange({ range: full, data: 0 }).range), false);
+  assert.equal(notCovered(unwrapRange({ range: full, data: null }).range), false);
+  assert.equal(notCovered(unwrapRange('2895793403').range), false); // old shape
 });
 
 test('rangeNote: a late start, an early end and the gaps (half-open), only when less than asked was covered', () => {

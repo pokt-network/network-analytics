@@ -42,6 +42,11 @@ export function unwrapRange<T>(v: unknown): { data: T | null; range: CoverageRan
   return { data: v as T, range: null };
 }
 
+/** Nothing in the range is covered: the indexer says so with null covered bounds (data is null or [] then). */
+export function notCovered(range: CoverageRange | null): boolean {
+  return !!range && range.covered_from === null && range.covered_to === null;
+}
+
 /** An end short of the window by less than this is the indexer's normal lag behind now, not missing data. */
 const COVERAGE_END_SLACK_MS = 3_600_000;
 
@@ -54,7 +59,7 @@ export function rangeNote(range: CoverageRange | null): string | null {
     const ms = t(s) - (exclusive ? 1 : 0);
     return Number.isNaN(ms) ? '…' : new Date(ms).toISOString().slice(0, 10);
   };
-  if (range.covered_from === null && range.covered_to === null) return 'No data indexed for this window yet';
+  if (notCovered(range)) return 'No data indexed for this window yet';
   const parts: string[] = [];
   if (range.covered_from && !(t(range.covered_from) <= t(range.requested_from))) parts.push(`Data since ${day(range.covered_from)}`);
   if (range.covered_to && t(range.covered_to) < t(range.requested_to) - COVERAGE_END_SLACK_MS) {
