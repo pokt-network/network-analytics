@@ -32,7 +32,11 @@ export async function getServicesList(): Promise<ServiceListItem[]> {
     );
     nodes.push(...(data.services?.nodes ?? []));
     after = data.services?.pageInfo?.endCursor ?? null;
-    if (!data.services?.pageInfo?.hasNextPage || !after) break;
+    if (!data.services?.pageInfo?.hasNextPage) break;
+    if (!after) {
+      console.warn(`services list: more pages but no cursor after ${nodes.length} rows, the rest is not listed`);
+      break;
+    }
   }
   const seen = new Set<string>();
   const out: ServiceListItem[] = [];
