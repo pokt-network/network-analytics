@@ -80,9 +80,14 @@ export async function getOwnerTotal(addresses: string[], range: RangeKey): Promi
     { addresses, start: w.startISO, end: w.endISO },
     { revalidate: rangeTTL(range) },
   );
-  // upokt: a BigFloat string from an older indexer, a JSON {range, data} from a newer one.
-  const total = unwrapRange<unknown>(parseScalar(data.legacyRewardsByAddressesAndTime), true);
-  const v = total.data; // parseScalar has already turned the old BigFloat string into a number
+  return ownerTotal(data.legacyRewardsByAddressesAndTime);
+}
+
+/** The total field as read: upokt as a BigFloat string from an older indexer, or a JSON {range, data} from a newer
+ *  one, whose data is the upokt as a numeric string (exact past 2^53) or null. */
+export function ownerTotal(field: unknown): { totalPokt: number | null; range: CoverageRange | null } {
+  const total = unwrapRange<unknown>(parseScalar(field), true);
+  const v = typeof total.data === 'string' && total.data.trim() !== '' ? Number(total.data) : total.data;
   return { totalPokt: notCovered(total.range) || typeof v !== 'number' || !Number.isFinite(v) ? null : toPokt(v), range: total.range };
 }
 
