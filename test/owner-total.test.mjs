@@ -30,4 +30,12 @@ test('a dash, never 0: nothing covered, or a value that is not a number', () => 
   assert.equal(ownerTotal({ range, data: 'abc' }).totalPokt, null);
   assert.equal(ownerTotal({ range, data: '' }).totalPokt, null);
   assert.equal(ownerTotal(null).totalPokt, null);
+  // only a plain decimal is a number: no hex, no padding
+  assert.equal(ownerTotal({ range, data: '0x10' }).totalPokt, null);
+  assert.equal(ownerTotal({ range, data: ' 5 ' }).totalPokt, null);
+});
+
+test('above 2^53 the string still reads, rounded to the nearest double (exact only below 2^53)', () => {
+  const t = ownerTotal({ range, data: '9007199254740993' }).totalPokt;
+  assert.equal(t, 9007199254740992 / 1e6);
 });

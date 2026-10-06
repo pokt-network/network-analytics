@@ -84,10 +84,11 @@ export async function getOwnerTotal(addresses: string[], range: RangeKey): Promi
 }
 
 /** The total field as read: upokt as a BigFloat string from an older indexer, or a JSON {range, data} from a newer
- *  one, whose data is the upokt as a numeric string (exact past 2^53) or null. */
+ *  one, whose data is the upokt as a decimal string (sent as a string so JSON does not round it; read as a JS number,
+ *  which is exact only below 2^53) or null. */
 export function ownerTotal(field: unknown): { totalPokt: number | null; range: CoverageRange | null } {
   const total = unwrapRange<unknown>(parseScalar(field), true);
-  const v = typeof total.data === 'string' && total.data.trim() !== '' ? Number(total.data) : total.data;
+  const v = typeof total.data === 'string' ? (/^-?\d+(\.\d+)?$/.test(total.data) ? Number(total.data) : null) : total.data;
   return { totalPokt: notCovered(total.range) || typeof v !== 'number' || !Number.isFinite(v) ? null : toPokt(v), range: total.range };
 }
 
