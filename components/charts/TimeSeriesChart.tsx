@@ -24,6 +24,15 @@ interface Props {
 const AXIS = 'var(--text-secondary)';
 const GRID = 'var(--border)';
 
+const isMissing = (v: unknown) => v === null || v === undefined;
+
+/** Without connectNulls a point with no neighbour draws no line; mark it so it does not vanish. */
+function isolatedDot(data: Props['data'], key: string, color: string, p: { cx?: number; cy?: number; index?: number }) {
+  const i = p.index ?? -1;
+  const lone = i >= 0 && !isMissing(data[i]?.[key]) && isMissing(data[i - 1]?.[key]) && isMissing(data[i + 1]?.[key]);
+  return lone && p.cx != null && p.cy != null ? <circle key={`${key}-${i}`} cx={p.cx} cy={p.cy} r={2.5} fill={color} /> : <g key={`${key}-${i}`} />;
+}
+
 export function TimeSeriesChart({ data, series, interval, height = 340, xKey = 'date', connectNulls = true }: Props) {
   return (
     <div style={{ height }} className="w-full">
@@ -47,7 +56,7 @@ export function TimeSeriesChart({ data, series, interval, height = 340, xKey = '
               name={s.label}
               stroke={s.color}
               strokeWidth={2}
-              dot={false}
+              dot={connectNulls ? false : (p: { cx?: number; cy?: number; index?: number }) => isolatedDot(data, s.key, s.color, p)}
               connectNulls={connectNulls}
               isAnimationActive={false}
             />

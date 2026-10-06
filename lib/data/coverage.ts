@@ -121,7 +121,10 @@ export function fillCoverage(
   const byDate = new Map(rows.map((r) => [String(r.date), r]));
   for (let b = first; b < last; b += step) {
     const date = new Date(b).toISOString();
-    const uncovered = b + step <= s.from || b >= s.to || s.gaps.some(([a, z]) => a <= b && b + step <= z);
+    // covered time inside the bucket: its overlap with the span, minus the gaps (merged, so they do not overlap)
+    const [lo, hi] = [Math.max(b, s.from), Math.min(b + step, s.to)];
+    const covered = s.gaps.reduce((c, [a, z]) => c - Math.max(0, Math.min(hi, z) - Math.max(lo, a)), Math.max(0, hi - lo));
+    const uncovered = covered <= 0;
     const row = { ...(byDate.get(date) ?? { date }) };
     for (const k of keys) if (!(k in row)) row[k] = uncovered ? null : 0;
     byDate.set(date, row);

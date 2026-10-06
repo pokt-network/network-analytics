@@ -26,7 +26,7 @@ interface DateRaw {
 
 export interface OwnerRewards {
   rows: Array<Record<string, number | string | null>>; // {date, [addr]:pokt} — or {date, total:pokt} when grouped; null = not covered
-  addresses: string[]; // series keys present (['total'] when grouped)
+  addresses: string[]; // addresses with rewards in the window (['total'] when grouped)
   grouped: boolean;
   range: CoverageRange | null; // what the indexer answered for (null from an indexer without the range contract)
 }
@@ -82,7 +82,7 @@ export async function getOwnerTotal(addresses: string[], range: RangeKey): Promi
   );
   // upokt: a BigFloat string from an older indexer, a JSON {range, data} from a newer one.
   const total = unwrapRange<unknown>(parseScalar(data.legacyRewardsByAddressesAndTime), true);
-  const v = typeof total.data === 'string' && total.data.trim() !== '' ? Number(total.data) : total.data;
+  const v = total.data; // parseScalar has already turned the old BigFloat string into a number
   return { totalPokt: notCovered(total.range) || typeof v !== 'number' || !Number.isFinite(v) ? null : toPokt(v), range: total.range };
 }
 

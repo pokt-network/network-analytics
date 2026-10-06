@@ -112,6 +112,19 @@ test('fillCoverage: null where nothing is covered (before, after, a whole-bucket
   const split = { ...r, gaps: [{ from: r.gaps[0].from, to: '2026-08-31T12:00:00+00:00' }, { from: '2026-08-31T12:00:00+00:00', to: r.gaps[0].to }] };
   assert.deepEqual(fillCoverage(rows, ['a', 'b', 'c'], L(split), 'day'), want);
   assert.equal(rangeNote(L(split), 'day'), rangeNote(L(r), 'day'));
+  // a bucket left uncovered by a gap and the early end together is null, not 0
+  const tail = {
+    requested_from: '2026-09-01T00:00:00+00:00',
+    requested_to: '2026-09-03T00:00:00+00:00',
+    covered_from: '2026-09-01T00:00:00+00:00',
+    covered_to: '2026-09-02T19:59:59.999999+00:00',
+    gaps: [{ from: '2026-09-02T00:00:00.000001+00:00', to: '2026-09-02T20:00:00+00:00' }],
+  };
+  assert.deepEqual(fillCoverage([{ date: '2026-09-01T00:00:00.000Z', a: 1 }], ['a'], L(tail), 'day'), [
+    { date: '2026-09-01T00:00:00.000Z', a: 1 },
+    { date: '2026-09-02T00:00:00.000Z', a: null },
+    { date: '2026-09-03T00:00:00.000Z', a: null },
+  ]);
   // an older indexer, nothing covered, no rows: unchanged
   assert.deepEqual(fillCoverage(rows, ['a'], null, 'day'), rows);
   assert.deepEqual(fillCoverage(rows, ['a'], L(none), 'day'), rows);
