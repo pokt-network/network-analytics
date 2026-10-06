@@ -8,7 +8,7 @@ import { loadAddresses, saveAddresses, parseAddressInput } from '@/lib/owner-sto
 import { useTabData } from '@/lib/use-tab-data';
 import type { OwnerResponse } from '@/app/api/owner/route';
 import type { IssuancePage, Issuance } from '@/lib/data/owner';
-import { rangeNote } from '@/lib/data/_util';
+import { rangeNote, notCovered } from '@/lib/data/coverage';
 import { toCsv, downloadCsv, csvFilename } from '@/lib/csv';
 import { formatNumber, formatCompact, formatPokt, truncate } from '@/lib/format';
 import { StatCard } from '@/components/ui/StatCard';
@@ -48,7 +48,8 @@ export function OwnerStakingView() {
   const addrParam = addresses.join(',');
   const rewards = useTabData<OwnerResponse>(addresses.length ? `/api/owner?addresses=${addrParam}&range=${range}&group=${groupAll ? 1 : 0}` : '');
   const issuances = useTabData<IssuancePage>(addresses.length ? `/api/owner/issuances?addresses=${addrParam}&page=${page}` : '');
-  const coverageNote = rangeNote(rewards.data?.rewards.range ?? null); // the indexer covers less than the window
+  const coverage = rewards.data?.rewards.range ?? null; // what the indexer covered of the window (null: older indexer)
+  const coverageNote = rewards.error ? null : rangeNote(coverage, range === '24h' ? 'hour' : 'day');
 
   function apply() {
     const { valid, invalid } = parseAddressInput(input);
@@ -202,12 +203,14 @@ export function OwnerStakingView() {
               <ErrorState>Couldn’t load rewards: {rewards.error}</ErrorState>
             ) : !rewards.data ? (
               <ChartSkeleton height={280} />
+            ) : notCovered(coverage) ? (
+              <EmptyState>No data indexed for this window.</EmptyState>
             ) : rewards.data.rewards.rows.length === 0 ? (
               <EmptyState>No rewards in this window.</EmptyState>
             ) : (
-              <TimeSeriesChart data={rewards.data.rewards.rows} series={chartSeries} interval={range === '24h' ? 'hour' : 'day'} height={280} />
+              <TimeSeriesChart data={rewards.data.rewards.rows} series={chartSeries} interval={range === '24h' ? 'hour' : 'day'} height={280} connectNulls={!coverage} />
             )}
-            {!rewards.error && coverageNote && <p className="mt-2 text-[12px] text-text-tertiary">{coverageNote}</p>}
+            {coverageNote && !notCovered(coverage) && <p className="mt-2 text-[12px] text-text-tertiary">{coverageNote}</p>}
           </Card>
 
           <Card>

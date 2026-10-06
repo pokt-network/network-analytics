@@ -11,18 +11,20 @@ export interface SeriesDef {
 }
 
 interface Props {
-  data: Array<Record<string, number | string>>;
+  data: Array<Record<string, number | string | null>>;
   series: SeriesDef[];
   interval: 'hour' | 'day' | 'week';
   height?: number;
   xKey?: string;
+  /** Draw lines across null points (default). Off when a null means "no data here", not "no point". */
+  connectNulls?: boolean;
 }
 
 // SVG stroke/fill accept CSS var() strings and inherit theme changes, so charts re-theme for free.
 const AXIS = 'var(--text-secondary)';
 const GRID = 'var(--border)';
 
-export function TimeSeriesChart({ data, series, interval, height = 340, xKey = 'date' }: Props) {
+export function TimeSeriesChart({ data, series, interval, height = 340, xKey = 'date', connectNulls = true }: Props) {
   return (
     <div style={{ height }} className="w-full">
       <ResponsiveContainer width="100%" height="100%">
@@ -46,7 +48,7 @@ export function TimeSeriesChart({ data, series, interval, height = 340, xKey = '
               stroke={s.color}
               strokeWidth={2}
               dot={false}
-              connectNulls
+              connectNulls={connectNulls}
               isAnimationActive={false}
             />
           ))}
