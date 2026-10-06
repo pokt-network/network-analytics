@@ -97,15 +97,21 @@ test('fillCoverage: null where nothing is covered (before, after, a whole-bucket
     { date: '2026-08-30T00:00:00.000Z', a: 1 },
     { date: '2026-09-01T00:00:00.000Z', a: 2, b: 3 },
   ];
-  assert.deepEqual(fillCoverage(rows, ['a', 'b'], L(r), 'day'), [
-    { date: '2026-08-28T00:00:00.000Z', a: null, b: null },
-    { date: '2026-08-29T00:00:00.000Z', a: null, b: null },
-    { date: '2026-08-30T00:00:00.000Z', a: 1, b: 0 }, // partly covered: from 12:00
-    { date: '2026-08-31T00:00:00.000Z', a: null, b: null }, // inside the gap
-    { date: '2026-09-01T00:00:00.000Z', a: 2, b: 3 },
-    { date: '2026-09-02T00:00:00.000Z', a: 0, b: 0 },
-    { date: '2026-09-03T00:00:00.000Z', a: null, b: null }, // after covered_to
-  ]);
+  // c: a tracked address with no rows at all draws 0 where covered, not nothing
+  const want = [
+    { date: '2026-08-28T00:00:00.000Z', a: null, b: null, c: null },
+    { date: '2026-08-29T00:00:00.000Z', a: null, b: null, c: null },
+    { date: '2026-08-30T00:00:00.000Z', a: 1, b: 0, c: 0 }, // partly covered: from 12:00
+    { date: '2026-08-31T00:00:00.000Z', a: null, b: null, c: null }, // inside the gap
+    { date: '2026-09-01T00:00:00.000Z', a: 2, b: 3, c: 0 },
+    { date: '2026-09-02T00:00:00.000Z', a: 0, b: 0, c: 0 },
+    { date: '2026-09-03T00:00:00.000Z', a: null, b: null, c: null }, // after covered_to
+  ];
+  assert.deepEqual(fillCoverage(rows, ['a', 'b', 'c'], L(r), 'day'), want);
+  // the same gap reported as two that touch: neither covers 08-31 alone, together they do
+  const split = { ...r, gaps: [{ from: r.gaps[0].from, to: '2026-08-31T12:00:00+00:00' }, { from: '2026-08-31T12:00:00+00:00', to: r.gaps[0].to }] };
+  assert.deepEqual(fillCoverage(rows, ['a', 'b', 'c'], L(split), 'day'), want);
+  assert.equal(rangeNote(L(split), 'day'), rangeNote(L(r), 'day'));
   // an older indexer, nothing covered, no rows: unchanged
   assert.deepEqual(fillCoverage(rows, ['a'], null, 'day'), rows);
   assert.deepEqual(fillCoverage(rows, ['a'], L(none), 'day'), rows);

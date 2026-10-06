@@ -33,18 +33,34 @@ export function notCovered(range: CoverageRange | null): boolean {
 }
 
 const ms = (s: string | null) => toDate(s)?.getTime() ?? NaN;
-// A null or unparseable bound is unbounded on that side.
-const lower = (s: string | null) => (Number.isFinite(ms(s)) ? ms(s) : -Infinity);
-const upper = (s: string | null, inclusive = false) => (Number.isFinite(ms(s)) ? ms(s) + (inclusive ? 1 : 0) : Infinity);
 
-/** The covered span within the window and the gaps inside it, as [from, to) milliseconds; a gap outside the span
- *  (the late start, the early end) is left to covered_from / covered_to, and the rest are clipped to the span. */
-function span(range: CoverageRange) {
-  const inc = !!range.end_inclusive;
-  const from = Math.max(lower(range.covered_from), lower(range.requested_from));
-  const to = Math.min(upper(range.covered_to, inc), upper(range.requested_to, inc));
-  const gaps = (range.gaps ?? []).map((g) => [Math.max(lower(g.from), from), Math.min(upper(g.to), to)]).filter(([a, b]) => a < b);
-  return { from, to, gaps };
+/**
+ * The range's times parsed once, in milliseconds (NaN: null or unparseable). `from` / `to` are the covered span within
+ * the window as [from, to) (an unbounded side is ±Infinity); `gaps` are the gaps inside it, clipped to it and merged
+ * where they touch. A gap outside the span (the late start, the early end) is left to covered_from / covered_to.
+ */
+function parse(range: CoverageRange) {
+  const inc = range.end_inclusive ? 1 : 0;
+  const t = {
+    requestedFrom: ms(range.requested_from),
+    requestedTo: ms(range.requested_to),
+    coveredFrom: ms(range.covered_from),
+    coveredTo: ms(range.covered_to),
+  };
+  const or = (v: number, unbounded: number) => (Number.isNaN(v) ? unbounded : v);
+  const from = Math.max(or(t.coveredFrom, -Infinity), or(t.requestedFrom, -Infinity));
+  const to = Math.min(or(t.coveredTo + inc, Infinity), or(t.requestedTo + inc, Infinity));
+  const gaps: Array<[number, number]> = [];
+  const clipped = (range.gaps ?? [])
+    .map((g): [number, number] => [Math.max(or(ms(g.from), -Infinity), from), Math.min(or(ms(g.to), Infinity), to)])
+    .filter(([a, b]) => a < b)
+    .sort((x, y) => x[0] - y[0]);
+  for (const [a, b] of clipped) {
+    const prev = gaps[gaps.length - 1];
+    if (prev && a <= prev[1]) prev[1] = Math.max(prev[1], b);
+    else gaps.push([a, b]);
+  }
+  return { ...t, from, to, gaps };
 }
 
 /** An end short of the window by less than this is the indexer's normal lag behind now, not missing data. */
@@ -58,20 +74,20 @@ const HOUR_PRECISION_MAX_MS = 48 * 3_600_000;
 export function rangeNote(range: CoverageRange | null, interval?: 'hour' | 'day' | 'week'): string | null {
   if (!range) return null;
   if (notCovered(range)) return 'No data indexed for this window';
-  const fine = interval === 'hour' || ms(range.requested_to) - ms(range.requested_from) <= HOUR_PRECISION_MAX_MS;
+  const p = parse(range);
+  const fine = interval === 'hour' || p.requestedTo - p.requestedFrom <= HOUR_PRECISION_MAX_MS;
   // `exclusiveEnd`: the instant is the end of a half-open span; at day precision it is shown as the day before it.
   const at = (t: number, exclusiveEnd = false) => {
     if (!Number.isFinite(t)) return '…';
     const iso = new Date(fine || !exclusiveEnd ? t : t - 1).toISOString();
     return fine ? `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC` : iso.slice(0, 10);
   };
-  const s = span(range);
   const parts: string[] = [];
-  if (!(ms(range.covered_from) <= ms(range.requested_from))) parts.push(`Data since ${at(ms(range.covered_from))}`);
-  if (ms(range.covered_to) < ms(range.requested_to) - COVERAGE_END_SLACK_MS) {
-    parts.push(`${parts.length ? 'until' : 'Data until'} ${at(ms(range.covered_to), !range.end_inclusive)}`);
+  if (!(p.coveredFrom <= p.requestedFrom)) parts.push(`Data since ${at(p.coveredFrom)}`);
+  if (p.coveredTo < p.requestedTo - COVERAGE_END_SLACK_MS) {
+    parts.push(`${parts.length ? 'until' : 'Data until'} ${at(p.coveredTo, !range.end_inclusive)}`);
   }
-  const gaps = s.gaps.map(([a, b]) => {
+  const gaps = p.gaps.map(([a, b]) => {
     const [x, y] = [at(a), at(b, true)];
     return x === y ? x : `${x} – ${y}`;
   });
@@ -85,7 +101,9 @@ const STEP_MS = { hour: 3_600_000, day: 86_400_000 } as const;
 /**
  * Chart rows over every bucket of the requested window: a covered bucket keeps its value, 0 when the series has none
  * (the indexer omits empty buckets), and a bucket with nothing covered (before covered_from, after covered_to, inside
- * a gap) is null, so a line does not bridge it. Rows are `{date: ISO bucket start, [key]: value}`. No range (an older
+ * a gap) is null, so a line does not bridge it. `keys` are every series the chart draws (the tracked addresses, not
+ * only those with rows), so a series with nothing in a covered bucket draws 0. Rows are `{date: ISO bucket start,
+ * [key]: value}`. No range (an older
  * indexer), nothing covered, no rows or a weekly interval: the rows as they are.
  */
 export function fillCoverage(
@@ -96,9 +114,9 @@ export function fillCoverage(
 ): Array<Record<string, number | string | null>> {
   if (!range || notCovered(range) || rows.length === 0 || interval === 'week') return rows;
   const step = STEP_MS[interval];
-  const s = span(range);
-  const first = Math.floor(ms(range.requested_from) / step) * step;
-  const last = ms(range.requested_to) + (range.end_inclusive ? 1 : 0); // exclusive
+  const s = parse(range);
+  const first = Math.floor(s.requestedFrom / step) * step;
+  const last = s.requestedTo + (range.end_inclusive ? 1 : 0); // exclusive
   if (!Number.isFinite(first) || !Number.isFinite(last) || (last - first) / step > 10_000) return rows;
   const byDate = new Map(rows.map((r) => [String(r.date), r]));
   for (let b = first; b < last; b += step) {

@@ -67,12 +67,12 @@ export async function getOwnerRewards(addresses: string[], range: RangeKey, grou
     row[r.address] = toPokt(num(r.total_amount));
   }
   const rows = [...byDate.keys()].sort().map((d) => byDate.get(d)!);
-  return { rows: fillCoverage(rows, [...addrSet], covered, w.interval), addresses: [...addrSet], grouped: false, range: covered };
+  return { rows: fillCoverage(rows, addresses, covered, w.interval), addresses: [...addrSet], grouped: false, range: covered };
 }
 
-/** Total rewards in POKT; null ("—", never 0) when nothing in the range is covered or the value is not a number.
- *  Same window as getOwnerRewards, so its `range` is the one shown. */
-export async function getOwnerTotal(addresses: string[], range: RangeKey): Promise<number | null> {
+/** Total rewards in POKT and the range it covers; `totalPokt` is null ("—", never 0) when nothing in the range is
+ *  covered or the value is not a number. */
+export async function getOwnerTotal(addresses: string[], range: RangeKey): Promise<{ totalPokt: number | null; range: CoverageRange | null }> {
   const w = rangeWindow(range);
   const data = await gqlFetch<{ legacyRewardsByAddressesAndTime: unknown }>(
     NETWORK,
@@ -83,7 +83,7 @@ export async function getOwnerTotal(addresses: string[], range: RangeKey): Promi
   // upokt: a BigFloat string from an older indexer, a JSON {range, data} from a newer one.
   const total = unwrapRange<unknown>(parseScalar(data.legacyRewardsByAddressesAndTime), true);
   const v = typeof total.data === 'string' && total.data.trim() !== '' ? Number(total.data) : total.data;
-  return notCovered(total.range) || typeof v !== 'number' || !Number.isFinite(v) ? null : toPokt(v);
+  return { totalPokt: notCovered(total.range) || typeof v !== 'number' || !Number.isFinite(v) ? null : toPokt(v), range: total.range };
 }
 
 interface SettleRaw {

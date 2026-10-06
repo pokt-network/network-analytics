@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { IconWallet, IconListCheck, IconCoin, IconReceipt, IconUsers, IconPercentage, IconChartLine, IconListDetails, IconExternalLink, IconDownload } from '@tabler/icons-react';
-import { EXPLORER_BASE_URL, OWNER_ADDRESS_CAP, SERIES_COLORS, NETWORK_TOTAL_COLOR, type RangeKey } from '@/lib/app-config';
+import { EXPLORER_BASE_URL, OWNER_ADDRESS_CAP, SERIES_COLORS, NETWORK_TOTAL_COLOR, RANGE_SPECS, type RangeKey } from '@/lib/app-config';
 import { UPOKT_PER_POKT } from '@/lib/config';
 import { loadAddresses, saveAddresses, parseAddressInput } from '@/lib/owner-storage';
 import { useTabData } from '@/lib/use-tab-data';
@@ -48,8 +48,10 @@ export function OwnerStakingView() {
   const addrParam = addresses.join(',');
   const rewards = useTabData<OwnerResponse>(addresses.length ? `/api/owner?addresses=${addrParam}&range=${range}&group=${groupAll ? 1 : 0}` : '');
   const issuances = useTabData<IssuancePage>(addresses.length ? `/api/owner/issuances?addresses=${addrParam}&page=${page}` : '');
-  const coverage = rewards.data?.rewards.range ?? null; // what the indexer covered of the window (null: older indexer)
-  const coverageNote = rewards.error ? null : rangeNote(coverage, range === '24h' ? 'hour' : 'day');
+  // What the indexer covered of the window, per call (null: an older indexer); each card notes its own.
+  const coverage = rewards.data?.rewards.range ?? null;
+  const coverageNote = rewards.error ? null : rangeNote(coverage, RANGE_SPECS[range].interval);
+  const totalNote = rewards.error ? null : rangeNote(rewards.data?.totalRange ?? null, RANGE_SPECS[range].interval);
 
   function apply() {
     const { valid, invalid } = parseAddressInput(input);
@@ -176,7 +178,7 @@ export function OwnerStakingView() {
       ) : (
         <>
           <div className="mb-4 grid grid-cols-2 gap-4 md:grid-cols-4">
-            <StatCard label={`Total Rewards (${range})`} value={rewards.data?.totalPokt != null ? formatCompact(rewards.data.totalPokt) : '—'} unit="POKT" icon={<IconCoin size={15} />} iconColor="var(--mint)" sub={coverageNote} />
+            <StatCard label={`Total Rewards (${range})`} value={rewards.data?.totalPokt != null ? formatCompact(rewards.data.totalPokt) : '—'} unit="POKT" icon={<IconCoin size={15} />} iconColor="var(--mint)" sub={totalNote} />
             <StatCard label="Settlements" value={formatNumber(totalCount)} icon={<IconReceipt size={15} />} iconColor="var(--blue-soft)" sub="all-time" />
             <StatCard label="Tracked Addresses" value={formatNumber(addresses.length)} icon={<IconUsers size={15} />} iconColor="var(--lavender)" />
             <StatCard label="Mint Ratio" value={avgMintRatio != null ? avgMintRatio.toFixed(3) : '—'} icon={<IconPercentage size={15} />} iconColor="var(--gold)" sub="latest settlement" />
@@ -208,7 +210,7 @@ export function OwnerStakingView() {
             ) : rewards.data.rewards.rows.length === 0 ? (
               <EmptyState>No rewards in this window.</EmptyState>
             ) : (
-              <TimeSeriesChart data={rewards.data.rewards.rows} series={chartSeries} interval={range === '24h' ? 'hour' : 'day'} height={280} connectNulls={!coverage} />
+              <TimeSeriesChart data={rewards.data.rewards.rows} series={chartSeries} interval={RANGE_SPECS[range].interval} height={280} connectNulls={!coverage} />
             )}
             {coverageNote && !notCovered(coverage) && <p className="mt-2 text-[12px] text-text-tertiary">{coverageNote}</p>}
           </Card>
