@@ -9,7 +9,7 @@ import {
   REWARDS_BY_DATE_GROUPED,
   EVENT_CLAIM_SETTLEDS,
 } from '@/lib/queries/analytics';
-import { num, parseScalar } from './_util';
+import { num, parseScalar, unwrapRange, type CoverageRange } from './_util';
 
 const toPokt = (u: number) => u / UPOKT_PER_POKT;
 
@@ -27,6 +27,7 @@ export interface OwnerRewards {
   rows: Array<Record<string, number | string>>; // {date, [addr]:pokt} — or {date, total:pokt} when grouped
   addresses: string[]; // series keys present (['total'] when grouped)
   grouped: boolean;
+  range: CoverageRange | null; // what the indexer answered for (null from an indexer without the range contract)
 }
 
 export async function getOwnerRewards(addresses: string[], range: RangeKey, groupAll: boolean): Promise<OwnerRewards> {
@@ -38,10 +39,11 @@ export async function getOwnerRewards(addresses: string[], range: RangeKey, grou
       { addresses, start: w.startISO, end: w.endISO, interval: w.interval },
       { revalidate: rangeTTL(range) },
     );
-    const rows = parseScalar<DateRaw[]>(data.legacyRewardsByAddressesAndTimeGroupByDate)
+    const { data: dated, range: covered } = unwrapRange<DateRaw[]>(parseScalar(data.legacyRewardsByAddressesAndTimeGroupByDate));
+    const rows = (dated ?? [])
       .map((r) => ({ date: toDate(r.date_truncated)?.toISOString() ?? r.date_truncated, total: toPokt(num(r.total_amount)) }))
       .sort((a, b) => String(a.date).localeCompare(String(b.date)));
-    return { rows, addresses: ['total'], grouped: true };
+    return { rows, addresses: ['total'], grouped: true, range: covered };
   }
 
   const data = await gqlFetch<{ legacyRewardsByAddressesAndTimeGroupByAddressAndDate: unknown }>(
@@ -50,10 +52,10 @@ export async function getOwnerRewards(addresses: string[], range: RangeKey, grou
     { addresses, start: w.startISO, end: w.endISO, interval: w.interval },
     { revalidate: rangeTTL(range) },
   );
-  const raw = parseScalar<AddrDateRaw[]>(data.legacyRewardsByAddressesAndTimeGroupByAddressAndDate);
+  const { data: raw, range: covered } = unwrapRange<AddrDateRaw[]>(parseScalar(data.legacyRewardsByAddressesAndTimeGroupByAddressAndDate));
   const byDate = new Map<string, Record<string, number | string>>();
   const addrSet = new Set<string>();
-  for (const r of raw) {
+  for (const r of raw ?? []) {
     const d = toDate(r.date_truncated)?.toISOString() ?? r.date_truncated;
     addrSet.add(r.address);
     let row = byDate.get(d);
@@ -64,10 +66,12 @@ export async function getOwnerRewards(addresses: string[], range: RangeKey, grou
     row[r.address] = toPokt(num(r.total_amount));
   }
   const rows = [...byDate.keys()].sort().map((d) => byDate.get(d)!);
-  return { rows, addresses: [...addrSet], grouped: false };
+  return { rows, addresses: [...addrSet], grouped: false, range: covered };
 }
 
-export async function getOwnerTotal(addresses: string[], range: RangeKey): Promise<number> {
+/** Total rewards in POKT; null when nothing in the range is covered (no data, not 0). Same window as getOwnerRewards,
+ *  so its `range` is the one shown. */
+export async function getOwnerTotal(addresses: string[], range: RangeKey): Promise<number | null> {
   const w = rangeWindow(range);
   const data = await gqlFetch<{ legacyRewardsByAddressesAndTime: unknown }>(
     NETWORK,
@@ -75,7 +79,9 @@ export async function getOwnerTotal(addresses: string[], range: RangeKey): Promi
     { addresses, start: w.startISO, end: w.endISO },
     { revalidate: rangeTTL(range) },
   );
-  return toPokt(num(data.legacyRewardsByAddressesAndTime)); // scalar BigFloat (upokt) as string
+  // upokt: a BigFloat string from an older indexer, a JSON {range, data} from a newer one.
+  const total = unwrapRange<number | string>(parseScalar(data.legacyRewardsByAddressesAndTime)).data;
+  return total === null ? null : toPokt(num(total));
 }
 
 interface SettleRaw {

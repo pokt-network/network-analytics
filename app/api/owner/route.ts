@@ -14,7 +14,7 @@ function parseAddrs(param: string | null): string[] {
 
 export interface OwnerResponse {
   addresses: string[];
-  totalPokt: number;
+  totalPokt: number | null; // null: nothing in the range is covered yet
   rewards: OwnerRewards;
 }
 
@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
   const groupAll = req.nextUrl.searchParams.get('group') === '1';
 
   if (addresses.length === 0) {
-    return NextResponse.json({ addresses, totalPokt: 0, rewards: { rows: [], addresses: [], grouped: groupAll } });
+    return NextResponse.json({ addresses, totalPokt: 0, rewards: { rows: [], addresses: [], grouped: groupAll, range: null } });
   }
 
   try {
@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
     ]);
     return NextResponse.json({ addresses, totalPokt, rewards } satisfies OwnerResponse);
   } catch (e) {
-    // The settlement functions raise for a range the indexer has not written yet, rather than return 0.
+    // An indexer without the range contract raises for a range it has not written yet, rather than return 0.
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });
   }
 }

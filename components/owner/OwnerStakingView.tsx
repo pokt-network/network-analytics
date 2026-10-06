@@ -8,6 +8,7 @@ import { loadAddresses, saveAddresses, parseAddressInput } from '@/lib/owner-sto
 import { useTabData } from '@/lib/use-tab-data';
 import type { OwnerResponse } from '@/app/api/owner/route';
 import type { IssuancePage, Issuance } from '@/lib/data/owner';
+import { rangeNote } from '@/lib/data/_util';
 import { toCsv, downloadCsv, csvFilename } from '@/lib/csv';
 import { formatNumber, formatCompact, formatPokt, truncate } from '@/lib/format';
 import { StatCard } from '@/components/ui/StatCard';
@@ -47,6 +48,7 @@ export function OwnerStakingView() {
   const addrParam = addresses.join(',');
   const rewards = useTabData<OwnerResponse>(addresses.length ? `/api/owner?addresses=${addrParam}&range=${range}&group=${groupAll ? 1 : 0}` : '');
   const issuances = useTabData<IssuancePage>(addresses.length ? `/api/owner/issuances?addresses=${addrParam}&page=${page}` : '');
+  const coverageNote = rangeNote(rewards.data?.rewards.range ?? null); // the indexer covers less than the window
 
   function apply() {
     const { valid, invalid } = parseAddressInput(input);
@@ -173,7 +175,7 @@ export function OwnerStakingView() {
       ) : (
         <>
           <div className="mb-4 grid grid-cols-2 gap-4 md:grid-cols-4">
-            <StatCard label={`Total Rewards (${range})`} value={rewards.data ? formatCompact(rewards.data.totalPokt) : '—'} unit="POKT" icon={<IconCoin size={15} />} iconColor="var(--mint)" />
+            <StatCard label={`Total Rewards (${range})`} value={rewards.data?.totalPokt != null ? formatCompact(rewards.data.totalPokt) : '—'} unit="POKT" icon={<IconCoin size={15} />} iconColor="var(--mint)" sub={coverageNote} />
             <StatCard label="Settlements" value={formatNumber(totalCount)} icon={<IconReceipt size={15} />} iconColor="var(--blue-soft)" sub="all-time" />
             <StatCard label="Tracked Addresses" value={formatNumber(addresses.length)} icon={<IconUsers size={15} />} iconColor="var(--lavender)" />
             <StatCard label="Mint Ratio" value={avgMintRatio != null ? avgMintRatio.toFixed(3) : '—'} icon={<IconPercentage size={15} />} iconColor="var(--gold)" sub="latest settlement" />
@@ -205,6 +207,7 @@ export function OwnerStakingView() {
             ) : (
               <TimeSeriesChart data={rewards.data.rewards.rows} series={chartSeries} interval={range === '24h' ? 'hour' : 'day'} height={280} />
             )}
+            {!rewards.error && coverageNote && <p className="mt-2 text-[12px] text-text-tertiary">{coverageNote}</p>}
           </Card>
 
           <Card>
