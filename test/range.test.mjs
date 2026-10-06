@@ -88,7 +88,7 @@ test('rangeNote: minutes (UTC) for an hourly chart or a window of 48 h or less',
 test('fillCoverage: null where nothing is covered (before, after, a whole-bucket gap), 0 where covered and absent', () => {
   const r = {
     requested_from: '2026-08-28T00:00:00+00:00',
-    requested_to: '2026-09-03T00:00:00+00:00',
+    requested_to: '2026-09-03T12:00:00+00:00',
     covered_from: '2026-08-30T12:00:00+00:00',
     covered_to: '2026-09-02T08:19:59.999999+00:00',
     gaps: [{ from: '2026-08-30T23:59:30.000001+00:00', to: '2026-09-01T00:00:10+00:00' }],
@@ -115,7 +115,7 @@ test('fillCoverage: null where nothing is covered (before, after, a whole-bucket
   // a bucket left uncovered by a gap and the early end together is null, not 0
   const tail = {
     requested_from: '2026-09-01T00:00:00+00:00',
-    requested_to: '2026-09-03T00:00:00+00:00',
+    requested_to: '2026-09-03T06:00:00+00:00',
     covered_from: '2026-09-01T00:00:00+00:00',
     covered_to: '2026-09-02T19:59:59.999999+00:00',
     gaps: [{ from: '2026-09-02T00:00:00.000001+00:00', to: '2026-09-02T20:00:00+00:00' }],
@@ -125,6 +125,12 @@ test('fillCoverage: null where nothing is covered (before, after, a whole-bucket
     { date: '2026-09-02T00:00:00.000Z', a: null },
     { date: '2026-09-03T00:00:00.000Z', a: null },
   ]);
+  // an inclusive end on a bucket edge (the 00:00 UTC minute) adds no trailing bucket outside the window
+  const edge = { ...full, requested_from: '2026-09-28T00:00:00+00:00' };
+  assert.deepEqual(
+    fillCoverage([{ date: '2026-09-28T00:00:00.000Z', a: 1 }], ['a'], L(edge), 'day').map((x) => x.date),
+    ['2026-09-28T00:00:00.000Z', '2026-09-29T00:00:00.000Z'],
+  );
   // an older indexer, nothing covered, no rows: unchanged
   assert.deepEqual(fillCoverage(rows, ['a'], null, 'day'), rows);
   assert.deepEqual(fillCoverage(rows, ['a'], L(none), 'day'), rows);

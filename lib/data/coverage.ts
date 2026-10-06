@@ -116,7 +116,8 @@ export function fillCoverage(
   const step = STEP_MS[interval];
   const s = parse(range);
   const first = Math.floor(s.requestedFrom / step) * step;
-  const last = s.requestedTo + (range.end_inclusive ? 1 : 0); // exclusive
+  // Buckets that start before requested_to: one starting at it (an inclusive end on a bucket edge) is outside the window.
+  const last = s.requestedTo;
   if (!Number.isFinite(first) || !Number.isFinite(last) || (last - first) / step > 10_000) return rows;
   const byDate = new Map(rows.map((r) => [String(r.date), r]));
   for (let b = first; b < last; b += step) {
