@@ -12,16 +12,31 @@ export interface ServiceListItem {
   name: string;
 }
 
-/** All services (id + label) for the picker, in one page (two pages of 100 cut the list at 200). */
+/** Pages of 1000 read for the picker before giving up (262 services today fit in the first). */
+const SERVICES_MAX_PAGES = 20;
+
+/** All services (id + label) for the picker: pages of 1000 by cursor, one request today. */
 export async function getServicesList(): Promise<ServiceListItem[]> {
-  const data = await gqlFetch<{ services: { totalCount: number; nodes: ServiceListItem[] } }>(NETWORK, SERVICES_LIST, undefined, { revalidate: 12 * 3600 });
-  const fetched = data.services?.nodes?.length ?? 0;
-  if ((data.services?.totalCount ?? 0) > fetched) {
-    console.warn(`services list: the indexer has ${data.services.totalCount} services, only the first ${fetched} are listed`);
+  const nodes: ServiceListItem[] = [];
+  let after: string | null = null;
+  for (let page = 0; ; page++) {
+    if (page === SERVICES_MAX_PAGES) {
+      console.warn(`services list: stopped after ${page} pages (${nodes.length} rows), the rest is not listed`);
+      break;
+    }
+    const data: { services: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: ServiceListItem[] } } = await gqlFetch(
+      NETWORK,
+      SERVICES_LIST,
+      { after },
+      { revalidate: 12 * 3600 },
+    );
+    nodes.push(...(data.services?.nodes ?? []));
+    after = data.services?.pageInfo?.endCursor ?? null;
+    if (!data.services?.pageInfo?.hasNextPage || !after) break;
   }
   const seen = new Set<string>();
   const out: ServiceListItem[] = [];
-  for (const n of data.services?.nodes ?? []) {
+  for (const n of nodes) {
     if (n?.id && !seen.has(n.id)) {
       seen.add(n.id);
       out.push({ id: n.id, name: n.name || n.id });

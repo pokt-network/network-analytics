@@ -94,12 +94,15 @@ export const TOKENOMICS_PARAM = /* GraphQL */ `
   }
 `;
 
-// Services list (id + label) for the Services picker. The indexer returns up to 1000 rows per page;
-// totalCount tells when there are more.
+// Services list (id + label) for the Services picker. The indexer returns up to 1000 rows per page; a longer
+// list is walked with `after` = the previous page's endCursor.
 export const SERVICES_LIST = /* GraphQL */ `
-  query servicesList {
-    services(first: 1000, orderBy: ID_ASC) {
-      totalCount
+  query servicesList($after: Cursor) {
+    services(first: 1000, orderBy: ID_ASC, after: $after) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
       nodes {
         id
         name
