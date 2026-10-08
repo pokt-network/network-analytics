@@ -93,8 +93,9 @@ export function ownerTotal(field: unknown): { totalPokt: number | null; range: C
   return { totalPokt: notCovered(total.range) || typeof v !== 'number' || !Number.isFinite(v) ? null : toPokt(v), range: total.range };
 }
 
-/** Settled claims of the owners' suppliers in the range, from the settlement catalog; null ("—", never 0) when
- *  nothing in the range is covered. Counting the raw settlement events instead took ~15 s for a large owner. */
+/** Settled claims in the range of the suppliers the owners own now (the catalog resolves owners at the latest block),
+ *  from the settlement catalog; null ("—", never 0) when nothing in the range is covered. Counting the raw settlement
+ *  events instead took ~15 s for a large owner. */
 export async function getOwnerSettledClaims(addresses: string[], range: RangeKey): Promise<{ count: number | null; range: CoverageRange | null }> {
   const w = rangeWindow(range);
   const data = await gqlFetch<{ getSupplierEarningsJson: unknown }>(
@@ -103,7 +104,7 @@ export async function getOwnerSettledClaims(addresses: string[], range: RangeKey
     { owners: addresses, start: w.startISO, end: w.endISO },
     { revalidate: rangeTTL(range) },
   );
-  const { data: rows, range: covered } = unwrapRange<Array<{ settled_claims: string | number }>>(parseScalar(data.getSupplierEarningsJson), true);
+  const { data: rows, range: covered } = unwrapRange<Array<{ settled_claims: string | number }>>(parseScalar(data.getSupplierEarningsJson), false);
   if (notCovered(covered)) return { count: null, range: covered };
   return { count: (rows ?? []).reduce((s, r) => s + num(r.settled_claims), 0), range: covered };
 }
@@ -133,6 +134,7 @@ export interface Issuance {
 export interface IssuancePage {
   rows: Issuance[];
   totalCount?: number; // absent when the caller asked for no count
+  hasNextPage: boolean; // more rows follow this page
   endCursor?: string | null; // pass as `after` to read the rows that follow this page
 }
 
@@ -141,10 +143,11 @@ export async function getOwnerIssuances(
   addresses: string[],
   page: number,
   pageSize = 25,
-  withCount = true,
+  withCount = false, // a count over every settlement of the owners: ~15 s for a large one
+
   after: string | null = null,
 ): Promise<IssuancePage> {
-  const data = await gqlFetch<{ eventClaimSettleds: { totalCount?: number; pageInfo: { endCursor: string | null }; nodes: SettleRaw[] } }>(
+  const data = await gqlFetch<{ eventClaimSettleds: { totalCount?: number; pageInfo: { endCursor: string | null; hasNextPage: boolean }; nodes: SettleRaw[] } }>(
     NETWORK,
     EVENT_CLAIM_SETTLEDS,
     { owners: addresses, first: pageSize, offset: after ? null : (page - 1) * pageSize, after, withCount },
@@ -154,6 +157,7 @@ export async function getOwnerIssuances(
   return {
     totalCount: withCount ? (d?.totalCount ?? 0) : undefined,
     endCursor: d?.pageInfo?.endCursor ?? null,
+    hasNextPage: d?.pageInfo?.hasNextPage ?? false,
     rows: (d?.nodes ?? []).map((n) => ({
       block: num(n.blockId),
       serviceId: n.serviceId,

@@ -17,7 +17,6 @@ import { RangePills } from '@/components/dashboard/RangePills';
 import { TimeSeriesChart, type SeriesDef } from '@/components/charts/TimeSeriesChart';
 import { ChartSkeleton, EmptyState, ErrorState } from '@/components/ui/states';
 
-const PAGE_SIZE = 25;
 // CSV export walks the indexer 1000 rows at a time (its page cap), each page after the previous one's
 // cursor. A single owner can have ~1M settlements, so cap the export at the most-recent N. 5,000
 // rows = 5 chunked requests — enough for meaningful analysis without hammering the indexer.
@@ -52,6 +51,7 @@ export function OwnerStakingView() {
   const coverage = rewards.data?.rewards.range ?? null;
   const coverageNote = rewards.error ? null : rangeNote(coverage, RANGE_SPECS[range].interval);
   const totalNote = rewards.error ? null : rangeNote(rewards.data?.totalRange ?? null, RANGE_SPECS[range].interval);
+  const settledNote = rewards.error ? null : rangeNote(rewards.data?.settledRange ?? null, RANGE_SPECS[range].interval);
 
   function apply() {
     const { valid, invalid } = parseAddressInput(input);
@@ -80,7 +80,7 @@ export function OwnerStakingView() {
     try {
       const all: Issuance[] = [];
       let after: string | null = null;
-      let more = true; // a full page may have rows after it; a short one is the last
+      let more = true;
       while (more && all.length < EXPORT_CAP) {
         // each page follows the previous one's cursor
         const next: string = after ? `&after=${encodeURIComponent(after)}` : '';
@@ -88,11 +88,11 @@ export function OwnerStakingView() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: IssuancePage = await res.json();
         all.push(...data.rows);
-        more = data.rows.length === EXPORT_CHUNK && !!data.endCursor;
+        more = data.hasNextPage && !!data.endCursor;
         after = data.endCursor ?? null;
       }
       const rows = all.slice(0, EXPORT_CAP);
-      const capped = more || all.length > EXPORT_CAP;
+      const capped = all.length > EXPORT_CAP || (more && all.length >= EXPORT_CAP);
       const headers = ['Block', 'Service', 'Owner', 'Relays', 'Settled (POKT)', 'Minted (POKT)', 'Mint Ratio', 'Transaction'];
       const body = rows.map((r) => [
         r.block,
@@ -128,8 +128,8 @@ export function OwnerStakingView() {
     : addresses.map((a) => ({ key: a, color: colorFor.get(a)!, label: truncate(a, 8, 5) }));
 
   const pageRows = issuances.data?.rows.length ?? 0;
-  // no total is counted (see the issuances route): a full page may have a next one
-  const hasNext = pageRows === PAGE_SIZE;
+  // no total is counted (see the issuances route): the indexer says whether rows follow this page
+  const hasNext = issuances.data?.hasNextPage ?? false;
   const hasRows = page > 1 || pageRows > 0;
   const settledClaims = rewards.data?.settledClaims ?? null;
   const avgMintRatio = issuances.data?.rows?.[0]?.mintRatio ?? null;
@@ -182,7 +182,7 @@ export function OwnerStakingView() {
         <>
           <div className="mb-4 grid grid-cols-2 gap-4 md:grid-cols-4">
             <StatCard label={`Total Rewards (${range})`} value={rewards.data?.totalPokt != null ? formatCompact(rewards.data.totalPokt) : '—'} unit="POKT" icon={<IconCoin size={15} />} iconColor="var(--mint)" sub={totalNote} />
-            <StatCard label={`Settlements (${range})`} value={settledClaims != null ? formatNumber(settledClaims) : '—'} icon={<IconReceipt size={15} />} iconColor="var(--blue-soft)" sub={totalNote} />
+            <StatCard label={`Settlements (${range})`} value={settledClaims != null ? formatNumber(settledClaims) : '—'} icon={<IconReceipt size={15} />} iconColor="var(--blue-soft)" sub={settledNote} />
             <StatCard label="Tracked Addresses" value={formatNumber(addresses.length)} icon={<IconUsers size={15} />} iconColor="var(--lavender)" />
             <StatCard label="Mint Ratio" value={avgMintRatio != null ? avgMintRatio.toFixed(3) : '—'} icon={<IconPercentage size={15} />} iconColor="var(--gold)" sub="latest settlement" />
           </div>
@@ -293,7 +293,7 @@ export function OwnerStakingView() {
               </table>
             </div>
             <div className="mt-3.5 flex items-center justify-between gap-3 text-[13px] text-text-secondary">
-              <span>page {formatNumber(page)}</span>
+              <span>page {formatNumber(page)} · newest first, all time</span>
               <div className="flex gap-1.5">
                 <button type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Prev</button>
                 <button type="button" disabled={!hasNext} onClick={() => setPage((p) => p + 1)} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>

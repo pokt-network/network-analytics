@@ -149,6 +149,7 @@ export const EVENT_CLAIM_SETTLEDS = /* GraphQL */ `
       totalCount @include(if: $withCount)
       pageInfo {
         endCursor
+        hasNextPage
       }
       nodes {
         serviceId

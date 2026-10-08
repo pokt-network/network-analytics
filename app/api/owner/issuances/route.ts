@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
   const after = req.nextUrl.searchParams.get('after') || null;
 
   if (addresses.length === 0) {
-    return NextResponse.json({ rows: [], totalCount: 0 } satisfies IssuancePage);
+    return NextResponse.json({ rows: [], totalCount: 0, hasNextPage: false } satisfies IssuancePage);
   }
   const result = await getOwnerIssuances(addresses, page, pageSize, withCount, after);
   return NextResponse.json(result);
