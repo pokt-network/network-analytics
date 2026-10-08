@@ -3,7 +3,7 @@ import { toDate } from '@/lib/time';
 import { UPOKT_PER_POKT } from '@/lib/config';
 import { NETWORK, type RangeKey } from '@/lib/app-config';
 import { rangeWindow, rangeTTL } from '@/lib/timeranges';
-import { SERVICES_LIST_PAGE, RELAYS_BY_SERVICE_PER_POINT } from '@/lib/queries/analytics';
+import { SERVICES_LIST, RELAYS_BY_SERVICE_PER_POINT } from '@/lib/queries/analytics';
 import { getServicesPerformance } from './traffic';
 import { num, parseScalar } from './_util';
 
@@ -12,14 +12,35 @@ export interface ServiceListItem {
   name: string;
 }
 
-/** All services (id + label) for the picker. Connection caps at 100 → two offset pages cover ~173. */
+/** Pages of 1000 read for the picker before giving up (262 services today fit in the first). */
+const SERVICES_MAX_PAGES = 20;
+
+/** All services (id + label) for the picker: pages of 1000 by cursor, one request today. */
 export async function getServicesList(): Promise<ServiceListItem[]> {
-  const page = (offset: number) =>
-    gqlFetch<{ services: { nodes: ServiceListItem[] } }>(NETWORK, SERVICES_LIST_PAGE, { offset }, { revalidate: 12 * 3600 });
-  const [p0, p1] = await Promise.all([page(0), page(100)]);
+  const nodes: ServiceListItem[] = [];
+  let after: string | null = null;
+  for (let page = 0; ; page++) {
+    if (page === SERVICES_MAX_PAGES) {
+      console.warn(`services list: stopped after ${page} pages (${nodes.length} rows), the rest is not listed`);
+      break;
+    }
+    // No per-page fetch cache: the route's unstable_cache keeps the whole walk, so the list is one snapshot.
+    const data: { services: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: ServiceListItem[] } } = await gqlFetch(
+      NETWORK,
+      SERVICES_LIST,
+      { after },
+    );
+    nodes.push(...(data.services?.nodes ?? []));
+    after = data.services?.pageInfo?.endCursor ?? null;
+    if (!data.services?.pageInfo?.hasNextPage) break;
+    if (!after) {
+      console.warn(`services list: more pages but no cursor after ${nodes.length} rows, the rest is not listed`);
+      break;
+    }
+  }
   const seen = new Set<string>();
   const out: ServiceListItem[] = [];
-  for (const n of [...(p0.services?.nodes ?? []), ...(p1.services?.nodes ?? [])]) {
+  for (const n of nodes) {
     if (n?.id && !seen.has(n.id)) {
       seen.add(n.id);
       out.push({ id: n.id, name: n.name || n.id });

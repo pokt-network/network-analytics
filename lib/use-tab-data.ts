@@ -41,7 +41,11 @@ function fetchShared(url: string): Promise<unknown> {
 
   const p = fetch(url)
     .then(async (r) => {
-      if (!r.ok) throw new Error(`Request failed (${r.status})`);
+      if (!r.ok) {
+        // Routes that catch their own failures send { error } with the reason; show it when present.
+        const body = (await r.json().catch(() => null)) as { error?: unknown } | null;
+        throw new Error(typeof body?.error === 'string' ? body.error : `Request failed (${r.status})`);
+      }
       const cacheState = (r.headers.get('x-cache') as CacheState) ?? null;
       const json = await r.json();
       cache.set(url, { ts: Date.now(), data: json, cache: cacheState });
@@ -92,7 +96,7 @@ function maybePrefetchSiblings(url: string): void {
 
 /**
  * Fetch JSON from an internal route handler, refetching when `url` changes.
- * Serves cached data instantly on revisit, keeps prior data visible during a cold fetch, and reports
+ * Serves cached data instantly on revisit, keeps prior data visible during a cold fetch (cleared if it fails), and reports
  * visible fetches to the global loading store so the shell can indicate activity.
  */
 export function useTabData<T>(url: string): State<T> {
@@ -135,7 +139,8 @@ export function useTabData<T>(url: string): State<T> {
           maybePrefetchSiblings(url);
         })
         .catch((e: Error) => {
-          if (active && e.name !== 'AbortError') setState((s) => ({ data: s.data, loading: false, error: e.message }));
+          // Drop the prior data: it belongs to the previous url and must not show under this one.
+          if (active && e.name !== 'AbortError') setState({ data: null, loading: false, error: e.message });
         });
     }
 

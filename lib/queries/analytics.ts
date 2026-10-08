@@ -57,12 +57,18 @@ export const DOMAINS_DISTINCT = /* GraphQL */ `
   }
 `;
 
-// Aggregate supplier count + staked tokens across the passed domains (call once per domain for rows).
-export const SUPPLIER_STATS_BY_DOMAINS = /* GraphQL */ `
-  query supplierStatsByDomains($domains: [String]) {
-    getSupplierStatsByDomains(pDomains: $domains)
+// Aggregate supplier count + staked tokens across the passed domains. The resolver sums every domain it
+// is given into one result, so per-domain rows need one call per domain: they go as aliases d0, d1, …
+// of a single request.
+export function supplierStatsByDomainsQuery(count: number): string {
+  const vars = Array.from({ length: count }, (_, i) => `$d${i}: [String]`).join(', ');
+  const fields = Array.from({ length: count }, (_, i) => `d${i}: getSupplierStatsByDomains(pDomains: $d${i})`).join('\n    ');
+  return /* GraphQL */ `
+  query supplierStatsByDomains(${vars}) {
+    ${fields}
   }
 `;
+}
 
 export const TOTAL_SUPPLY_BY_DAY = /* GraphQL */ `
   query totalSupplyByDay($start: Datetime, $end: Datetime) {
@@ -88,10 +94,15 @@ export const TOKENOMICS_PARAM = /* GraphQL */ `
   }
 `;
 
-// Services list (id + label) for the Services picker. Connection caps at 100 → paginate with offset.
-export const SERVICES_LIST_PAGE = /* GraphQL */ `
-  query servicesListPage($offset: Int) {
-    services(first: 100, offset: $offset, orderBy: ID_ASC) {
+// Services list (id + label) for the Services picker. The indexer returns up to 1000 rows per page; a longer
+// list is walked with `after` = the previous page's endCursor.
+export const SERVICES_LIST = /* GraphQL */ `
+  query servicesList($after: Cursor) {
+    services(first: 1000, orderBy: ID_ASC, after: $after) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
       nodes {
         id
         name
@@ -101,29 +112,37 @@ export const SERVICES_LIST_PAGE = /* GraphQL */ `
 `;
 
 // ── Owner Staking (addresses are [String]) ──
+// legacy* = the getRewardsByAddressesAndTime* arguments and JSON, read from the settlement tables.
 export const REWARDS_BY_ADDRESSES_TIME = /* GraphQL */ `
   query rewardsByAddressesTime($addresses: [String], $start: Datetime, $end: Datetime) {
-    getRewardsByAddressesAndTime(addresses: $addresses, startDate: $start, endDate: $end)
+    legacyRewardsByAddressesAndTime(addresses: $addresses, startDate: $start, endDate: $end)
   }
 `;
 
 export const REWARDS_BY_ADDRESS_DATE = /* GraphQL */ `
   query rewardsByAddressDate($addresses: [String], $start: Datetime, $end: Datetime, $interval: String) {
-    getRewardsByAddressesAndTimeGroupByAddressAndDate(addresses: $addresses, startDate: $start, endDate: $end, truncInterval: $interval)
+    legacyRewardsByAddressesAndTimeGroupByAddressAndDate(addresses: $addresses, startDate: $start, endDate: $end, truncInterval: $interval)
   }
 `;
 
 export const REWARDS_BY_DATE_GROUPED = /* GraphQL */ `
   query rewardsByDateGrouped($addresses: [String], $start: Datetime, $end: Datetime, $interval: String) {
-    getRewardsByAddressesAndTimeGroupByDate(addresses: $addresses, startDate: $start, endDate: $end, truncInterval: $interval)
+    legacyRewardsByAddressesAndTimeGroupByDate(addresses: $addresses, startDate: $start, endDate: $end, truncInterval: $interval)
   }
 `;
 
 // eventClaimSettleds: 23.2M rows — ALWAYS filter (by owner) + paginate. transactionId can be null.
+// ID_DESC orders the rows of one block, so the order is total. A walk over many pages (the CSV export)
+// passes `after` = the previous page's endCursor, a keyset on (block, id): a settlement indexed meanwhile
+// cannot shift the rows as it does with OFFSET (which then repeats and drops rows across pages). totalCount
+// counts every settlement of the owners (seconds for a large owner), so it is only fetched when asked for.
 export const EVENT_CLAIM_SETTLEDS = /* GraphQL */ `
-  query eventClaimSettleds($owners: [String!], $first: Int, $offset: Int) {
-    eventClaimSettleds(filter: { supplierOwnerId: { in: $owners } }, orderBy: BLOCK_ID_DESC, first: $first, offset: $offset) {
-      totalCount
+  query eventClaimSettleds($owners: [String!], $first: Int, $offset: Int, $after: Cursor, $withCount: Boolean!) {
+    eventClaimSettleds(filter: { supplierOwnerId: { in: $owners } }, orderBy: [BLOCK_ID_DESC, ID_DESC], first: $first, offset: $offset, after: $after) {
+      totalCount @include(if: $withCount)
+      pageInfo {
+        endCursor
+      }
       nodes {
         serviceId
         numRelays

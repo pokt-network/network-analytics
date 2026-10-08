@@ -39,6 +39,17 @@ export function fixedWindow(seconds: number, now: number = Date.now()) {
   };
 }
 
+/** Whole UTC days: from `days` days before today's 00:00Z to tomorrow's 00:00Z. For resolvers that
+ *  return one point per day this gives the same points as a window ending now, but the edges move once
+ *  a day instead of once a minute, so the inner fetch cache (keyed on request body) is actually reused. */
+export function dayWindow(days: number, now: number = Date.now()) {
+  const day = Math.floor(now / 86_400_000) * 86_400_000;
+  return {
+    startISO: new Date(day - days * 86_400_000).toISOString(),
+    endISO: new Date(day + 86_400_000).toISOString(),
+  };
+}
+
 /** Cache TTL. Long enough that the cron warmer keeps entries fresh between runs; the 24h (hourly)
  *  window stays shorter since it moves faster. These are analytics, not real-time — minutes of
  *  staleness is fine (the live strip stays live separately). */

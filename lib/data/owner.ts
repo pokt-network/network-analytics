@@ -10,6 +10,7 @@ import {
   EVENT_CLAIM_SETTLEDS,
 } from '@/lib/queries/analytics';
 import { num, parseScalar } from './_util';
+import { unwrapRange, notCovered, fillCoverage, type CoverageRange } from './coverage';
 
 const toPokt = (u: number) => u / UPOKT_PER_POKT;
 
@@ -24,36 +25,38 @@ interface DateRaw {
 }
 
 export interface OwnerRewards {
-  rows: Array<Record<string, number | string>>; // {date, [addr]:pokt} — or {date, total:pokt} when grouped
-  addresses: string[]; // series keys present (['total'] when grouped)
+  rows: Array<Record<string, number | string | null>>; // {date, [addr]:pokt} — or {date, total:pokt} when grouped; null = not covered
+  addresses: string[]; // addresses with rewards in the window (['total'] when grouped)
   grouped: boolean;
+  range: CoverageRange | null; // what the indexer answered for (null from an indexer without the range contract)
 }
 
 export async function getOwnerRewards(addresses: string[], range: RangeKey, groupAll: boolean): Promise<OwnerRewards> {
   const w = rangeWindow(range);
   if (groupAll) {
-    const data = await gqlFetch<{ getRewardsByAddressesAndTimeGroupByDate: unknown }>(
+    const data = await gqlFetch<{ legacyRewardsByAddressesAndTimeGroupByDate: unknown }>(
       NETWORK,
       REWARDS_BY_DATE_GROUPED,
       { addresses, start: w.startISO, end: w.endISO, interval: w.interval },
       { revalidate: rangeTTL(range) },
     );
-    const rows = parseScalar<DateRaw[]>(data.getRewardsByAddressesAndTimeGroupByDate)
+    const { data: dated, range: covered } = unwrapRange<DateRaw[]>(parseScalar(data.legacyRewardsByAddressesAndTimeGroupByDate), true);
+    const rows = (dated ?? [])
       .map((r) => ({ date: toDate(r.date_truncated)?.toISOString() ?? r.date_truncated, total: toPokt(num(r.total_amount)) }))
       .sort((a, b) => String(a.date).localeCompare(String(b.date)));
-    return { rows, addresses: ['total'], grouped: true };
+    return { rows: fillCoverage(rows, ['total'], covered, w.interval), addresses: ['total'], grouped: true, range: covered };
   }
 
-  const data = await gqlFetch<{ getRewardsByAddressesAndTimeGroupByAddressAndDate: unknown }>(
+  const data = await gqlFetch<{ legacyRewardsByAddressesAndTimeGroupByAddressAndDate: unknown }>(
     NETWORK,
     REWARDS_BY_ADDRESS_DATE,
     { addresses, start: w.startISO, end: w.endISO, interval: w.interval },
     { revalidate: rangeTTL(range) },
   );
-  const raw = parseScalar<AddrDateRaw[]>(data.getRewardsByAddressesAndTimeGroupByAddressAndDate);
+  const { data: raw, range: covered } = unwrapRange<AddrDateRaw[]>(parseScalar(data.legacyRewardsByAddressesAndTimeGroupByAddressAndDate), true);
   const byDate = new Map<string, Record<string, number | string>>();
   const addrSet = new Set<string>();
-  for (const r of raw) {
+  for (const r of raw ?? []) {
     const d = toDate(r.date_truncated)?.toISOString() ?? r.date_truncated;
     addrSet.add(r.address);
     let row = byDate.get(d);
@@ -64,18 +67,29 @@ export async function getOwnerRewards(addresses: string[], range: RangeKey, grou
     row[r.address] = toPokt(num(r.total_amount));
   }
   const rows = [...byDate.keys()].sort().map((d) => byDate.get(d)!);
-  return { rows, addresses: [...addrSet], grouped: false };
+  return { rows: fillCoverage(rows, addresses, covered, w.interval), addresses: [...addrSet], grouped: false, range: covered };
 }
 
-export async function getOwnerTotal(addresses: string[], range: RangeKey): Promise<number> {
+/** Total rewards in POKT and the range it covers; `totalPokt` is null ("—", never 0) when nothing in the range is
+ *  covered or the value is not a number. */
+export async function getOwnerTotal(addresses: string[], range: RangeKey): Promise<{ totalPokt: number | null; range: CoverageRange | null }> {
   const w = rangeWindow(range);
-  const data = await gqlFetch<{ getRewardsByAddressesAndTime: unknown }>(
+  const data = await gqlFetch<{ legacyRewardsByAddressesAndTime: unknown }>(
     NETWORK,
     REWARDS_BY_ADDRESSES_TIME,
     { addresses, start: w.startISO, end: w.endISO },
     { revalidate: rangeTTL(range) },
   );
-  return toPokt(num(data.getRewardsByAddressesAndTime)); // scalar BigFloat (upokt) as string
+  return ownerTotal(data.legacyRewardsByAddressesAndTime);
+}
+
+/** The total field as read: upokt as a BigFloat string from an older indexer, or a JSON {range, data} from a newer
+ *  one, whose data is the upokt as a decimal string (sent as a string so JSON does not round it; read as a JS number,
+ *  which is exact only below 2^53) or null. */
+export function ownerTotal(field: unknown): { totalPokt: number | null; range: CoverageRange | null } {
+  const total = unwrapRange<unknown>(parseScalar(field), true);
+  const v = typeof total.data === 'string' ? (/^-?\d+(\.\d+)?$/.test(total.data) ? Number(total.data) : null) : total.data;
+  return { totalPokt: notCovered(total.range) || typeof v !== 'number' || !Number.isFinite(v) ? null : toPokt(v), range: total.range };
 }
 
 interface SettleRaw {
@@ -102,19 +116,28 @@ export interface Issuance {
 
 export interface IssuancePage {
   rows: Issuance[];
-  totalCount: number;
+  totalCount?: number; // absent when the caller asked for no count
+  endCursor?: string | null; // pass as `after` to read the rows that follow this page
 }
 
-export async function getOwnerIssuances(addresses: string[], page: number, pageSize = 25): Promise<IssuancePage> {
-  const data = await gqlFetch<{ eventClaimSettleds: { totalCount: number; nodes: SettleRaw[] } }>(
+/** One page of settlements, newest first: by page number (offset), or the rows after `after` (a cursor). */
+export async function getOwnerIssuances(
+  addresses: string[],
+  page: number,
+  pageSize = 25,
+  withCount = true,
+  after: string | null = null,
+): Promise<IssuancePage> {
+  const data = await gqlFetch<{ eventClaimSettleds: { totalCount?: number; pageInfo: { endCursor: string | null }; nodes: SettleRaw[] } }>(
     NETWORK,
     EVENT_CLAIM_SETTLEDS,
-    { owners: addresses, first: pageSize, offset: (page - 1) * pageSize },
+    { owners: addresses, first: pageSize, offset: after ? null : (page - 1) * pageSize, after, withCount },
     { revalidate: 30 },
   );
   const d = data.eventClaimSettleds;
   return {
-    totalCount: d?.totalCount ?? 0,
+    totalCount: withCount ? (d?.totalCount ?? 0) : undefined,
+    endCursor: d?.pageInfo?.endCursor ?? null,
     rows: (d?.nodes ?? []).map((n) => ({
       block: num(n.blockId),
       serviceId: n.serviceId,

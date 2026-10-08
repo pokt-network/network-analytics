@@ -5,8 +5,8 @@ import { OWNER_ADDRESS_CAP } from '@/lib/app-config';
 
 const PAGE_SIZE = 25;
 // Larger pages are only used by the CSV "export all" path, which walks pages client-side. The indexer
-// (PostGraphile) hard-caps `first` at 100, so there's no point asking for more.
-const MAX_PAGE_SIZE = 100;
+// (PostGraphile) caps `first` at 1000.
+const MAX_PAGE_SIZE = 1000;
 
 function parseAddrs(param: string | null): string[] {
   if (!param) return [];
@@ -22,10 +22,14 @@ export async function GET(req: NextRequest) {
   const page = Math.max(1, Number(req.nextUrl.searchParams.get('page')) || 1);
   const reqSize = Number(req.nextUrl.searchParams.get('pageSize'));
   const pageSize = Number.isFinite(reqSize) && reqSize > 0 ? Math.min(reqSize, MAX_PAGE_SIZE) : PAGE_SIZE;
+  // count=0 skips totalCount (the export reads it from its first page only).
+  const withCount = req.nextUrl.searchParams.get('count') !== '0';
+  // after=<endCursor of the previous page> reads the rows that follow it (the export), instead of `page`.
+  const after = req.nextUrl.searchParams.get('after') || null;
 
   if (addresses.length === 0) {
     return NextResponse.json({ rows: [], totalCount: 0 } satisfies IssuancePage);
   }
-  const result = await getOwnerIssuances(addresses, page, pageSize);
+  const result = await getOwnerIssuances(addresses, page, pageSize, withCount, after);
   return NextResponse.json(result);
 }

@@ -2,26 +2,27 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { IconWallet, IconListCheck, IconCoin, IconReceipt, IconUsers, IconPercentage, IconChartLine, IconListDetails, IconExternalLink, IconDownload } from '@tabler/icons-react';
-import { EXPLORER_BASE_URL, OWNER_ADDRESS_CAP, SERIES_COLORS, NETWORK_TOTAL_COLOR, type RangeKey } from '@/lib/app-config';
+import { EXPLORER_BASE_URL, OWNER_ADDRESS_CAP, SERIES_COLORS, NETWORK_TOTAL_COLOR, RANGE_SPECS, type RangeKey } from '@/lib/app-config';
 import { UPOKT_PER_POKT } from '@/lib/config';
 import { loadAddresses, saveAddresses, parseAddressInput } from '@/lib/owner-storage';
 import { useTabData } from '@/lib/use-tab-data';
 import type { OwnerResponse } from '@/app/api/owner/route';
 import type { IssuancePage, Issuance } from '@/lib/data/owner';
+import { rangeNote, notCovered } from '@/lib/data/coverage';
 import { toCsv, downloadCsv, csvFilename } from '@/lib/csv';
 import { formatNumber, formatCompact, formatPokt, truncate } from '@/lib/format';
 import { StatCard } from '@/components/ui/StatCard';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { RangePills } from '@/components/dashboard/RangePills';
 import { TimeSeriesChart, type SeriesDef } from '@/components/charts/TimeSeriesChart';
-import { ChartSkeleton, EmptyState } from '@/components/ui/states';
+import { ChartSkeleton, EmptyState, ErrorState } from '@/components/ui/states';
 
 const PAGE_SIZE = 25;
-// CSV export walks the indexer 100 rows at a time (its hard page cap). A single owner can have ~1M
-// settlements and deep OFFSET paging degrades sharply, so cap the export at the most-recent N. 5,000
-// rows = ~50 chunked requests — enough for meaningful analysis without hammering the indexer.
+// CSV export walks the indexer 1000 rows at a time (its page cap), each page after the previous one's
+// cursor. A single owner can have ~1M settlements, so cap the export at the most-recent N. 5,000
+// rows = 5 chunked requests — enough for meaningful analysis without hammering the indexer.
 const EXPORT_CAP = 5000;
-const EXPORT_CHUNK = 100;
+const EXPORT_CHUNK = 1000;
 
 export function OwnerStakingView() {
   const [addresses, setAddresses] = useState<string[]>([]);
@@ -47,6 +48,10 @@ export function OwnerStakingView() {
   const addrParam = addresses.join(',');
   const rewards = useTabData<OwnerResponse>(addresses.length ? `/api/owner?addresses=${addrParam}&range=${range}&group=${groupAll ? 1 : 0}` : '');
   const issuances = useTabData<IssuancePage>(addresses.length ? `/api/owner/issuances?addresses=${addrParam}&page=${page}` : '');
+  // What the indexer covered of the window, per call (null: an older indexer); each card notes its own.
+  const coverage = rewards.data?.rewards.range ?? null;
+  const coverageNote = rewards.error ? null : rangeNote(coverage, RANGE_SPECS[range].interval);
+  const totalNote = rewards.error ? null : rangeNote(rewards.data?.totalRange ?? null, RANGE_SPECS[range].interval);
 
   function apply() {
     const { valid, invalid } = parseAddressInput(input);
@@ -62,10 +67,11 @@ export function OwnerStakingView() {
     setDropped(0);
   }
 
-  // CSV export: the table is server-paginated, so walk pages (100/req — the indexer's cap) and
-  // assemble the history before downloading. Ordered newest-first (BLOCK_ID_DESC). A single owner can
-  // have ~1M settlements and deep OFFSET paging degrades fast, so the export is capped at the
-  // most-recent EXPORT_CAP rows and the truncation is surfaced, never silent. Amounts export as plain
+  // CSV export: the table is server-paginated, so walk pages (1000/req — the indexer's cap) and
+  // assemble the history before downloading. Ordered newest-first (block, then id); each page is read
+  // after the previous page's cursor, so settlements indexed meanwhile neither repeat nor drop rows. A
+  // single owner can have ~1M settlements, so the export is capped at the most-recent EXPORT_CAP rows
+  // and the truncation is surfaced, never silent. Amounts export as plain
   // POKT numbers (no separators) so they parse cleanly in Excel/pandas.
   async function exportIssuancesCsv() {
     if (exporting || addresses.length === 0) return;
@@ -73,16 +79,18 @@ export function OwnerStakingView() {
     setExportNote(null);
     try {
       const all: Issuance[] = [];
-      let p = 1;
+      let after: string | null = null;
       let total = Infinity;
       while (all.length < total && all.length < EXPORT_CAP) {
-        const res = await fetch(`/api/owner/issuances?addresses=${addrParam}&page=${p}&pageSize=${EXPORT_CHUNK}`);
+        // the total is counted once, on the first page; the next pages follow the previous one's cursor
+        const next: string = after ? `&after=${encodeURIComponent(after)}&count=0` : '';
+        const res = await fetch(`/api/owner/issuances?addresses=${addrParam}&pageSize=${EXPORT_CHUNK}${next}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: IssuancePage = await res.json();
-        total = data.totalCount ?? 0;
+        if (!after) total = data.totalCount ?? 0;
         all.push(...data.rows);
-        if (data.rows.length === 0) break; // safety: nothing more to page through
-        p++;
+        if (data.rows.length === 0 || !data.endCursor) break; // safety: nothing more to page through
+        after = data.endCursor;
       }
       const rows = all.slice(0, EXPORT_CAP);
       const headers = ['Block', 'Service', 'Owner', 'Relays', 'Settled (POKT)', 'Minted (POKT)', 'Mint Ratio', 'Transaction'];
@@ -170,7 +178,7 @@ export function OwnerStakingView() {
       ) : (
         <>
           <div className="mb-4 grid grid-cols-2 gap-4 md:grid-cols-4">
-            <StatCard label={`Total Rewards (${range})`} value={rewards.data ? formatCompact(rewards.data.totalPokt) : '—'} unit="POKT" icon={<IconCoin size={15} />} iconColor="var(--mint)" />
+            <StatCard label={`Total Rewards (${range})`} value={rewards.data?.totalPokt != null ? formatCompact(rewards.data.totalPokt) : '—'} unit="POKT" icon={<IconCoin size={15} />} iconColor="var(--mint)" sub={totalNote} />
             <StatCard label="Settlements" value={formatNumber(totalCount)} icon={<IconReceipt size={15} />} iconColor="var(--blue-soft)" sub="all-time" />
             <StatCard label="Tracked Addresses" value={formatNumber(addresses.length)} icon={<IconUsers size={15} />} iconColor="var(--lavender)" />
             <StatCard label="Mint Ratio" value={avgMintRatio != null ? avgMintRatio.toFixed(3) : '—'} icon={<IconPercentage size={15} />} iconColor="var(--gold)" sub="latest settlement" />
@@ -193,13 +201,18 @@ export function OwnerStakingView() {
                 </div>
               }
             />
-            {!rewards.data ? (
+            {rewards.error ? (
+              <ErrorState>Couldn’t load rewards: {rewards.error}</ErrorState>
+            ) : !rewards.data ? (
               <ChartSkeleton height={280} />
+            ) : notCovered(coverage) ? (
+              <EmptyState>No data indexed for this window.</EmptyState>
             ) : rewards.data.rewards.rows.length === 0 ? (
               <EmptyState>No rewards in this window.</EmptyState>
             ) : (
-              <TimeSeriesChart data={rewards.data.rewards.rows} series={chartSeries} interval={range === '24h' ? 'hour' : 'day'} height={280} />
+              <TimeSeriesChart data={rewards.data.rewards.rows} series={chartSeries} interval={RANGE_SPECS[range].interval} height={280} connectNulls={!coverage} />
             )}
+            {coverageNote && !notCovered(coverage) && <p className="mt-2 text-[12px] text-text-tertiary">{coverageNote}</p>}
           </Card>
 
           <Card>
