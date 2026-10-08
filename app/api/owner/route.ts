@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { getOwnerRewards, getOwnerSettledClaims, getOwnerTotal, type OwnerRewards } from '@/lib/data/owner';
 import type { CoverageRange } from '@/lib/data/coverage';
-import { ADDRESS_RE } from '@/lib/owner-storage';
+import { ADDRESS_RE } from '@/lib/staking/addresses';
 import { DEFAULT_RANGE, isRangeKey, OWNER_ADDRESS_CAP, type RangeKey } from '@/lib/app-config';
 
 function parseAddrs(param: string | null): string[] {

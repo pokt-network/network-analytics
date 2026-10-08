@@ -2,11 +2,20 @@
 
 import { RANGE_KEYS, type RangeKey } from '@/lib/app-config';
 
-// Global range control for the five dashboard tabs (hidden in the Owner Staking view).
-export function RangePills({ value, onChange }: { value: RangeKey; onChange: (r: RangeKey) => void }) {
+// Global range control. `ranges` can narrow the offered set (the Operator tool caps at 30d — its
+// per-event resolvers time out at 60d).
+export function RangePills({
+  value,
+  onChange,
+  ranges = RANGE_KEYS,
+}: {
+  value: RangeKey;
+  onChange: (r: RangeKey) => void;
+  ranges?: RangeKey[];
+}) {
   return (
     <div className="flex gap-1 rounded-[10px] border bg-bg-card p-1 sm:p-[3px]">
-      {RANGE_KEYS.map((k) => (
+      {ranges.map((k) => (
         <button
           key={k}
           type="button"

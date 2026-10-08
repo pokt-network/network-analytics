@@ -1,37 +1,36 @@
-// Owner Staking address list persistence. bech32 addresses are PUBLIC identifiers (not secrets),
-// so localStorage is the correct place for a personal watchlist. On read we validate + drop
+// Shared address handling for the staking tools (Owner + Operator). bech32 pokt1 addresses are
+// PUBLIC identifiers (not secrets), so a per-tool watchlist lives in localStorage. Each tool passes
+// its own storage key so the Owner and Operator lists never collide. On read we validate + drop
 // malformed entries so a hand-edited/corrupt store can never break the page.
-import { OWNER_ADDRESS_CAP } from '@/lib/app-config';
 
 export const ADDRESS_RE = /^pokt1[0-9a-z]{38,}$/;
-const KEY = 'pnf-analytics-owner-addresses';
 
 export function isValidAddress(a: string): boolean {
   return ADDRESS_RE.test(a);
 }
 
-export function loadAddresses(): string[] {
+export function loadAddresses(key: string, cap: number): string[] {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) return [];
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return [];
-    return arr.filter((a) => typeof a === 'string' && ADDRESS_RE.test(a)).slice(0, OWNER_ADDRESS_CAP);
+    return arr.filter((a) => typeof a === 'string' && ADDRESS_RE.test(a)).slice(0, cap);
   } catch {
     return [];
   }
 }
 
-export function saveAddresses(list: string[]): void {
+export function saveAddresses(key: string, list: string[], cap: number): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(list.slice(0, OWNER_ADDRESS_CAP)));
+    localStorage.setItem(key, JSON.stringify(list.slice(0, cap)));
   } catch {
     /* storage unavailable — non-fatal */
   }
 }
 
 /** Split a paste box (comma/whitespace/newline separated) into valid + invalid, deduped, capped. */
-export function parseAddressInput(text: string): { valid: string[]; invalid: string[] } {
+export function parseAddressInput(text: string, cap: number): { valid: string[]; invalid: string[] } {
   const tokens = text
     .split(/[\s,]+/)
     .map((t) => t.trim())
@@ -45,5 +44,5 @@ export function parseAddressInput(text: string): { valid: string[]; invalid: str
       invalid.push(t);
     }
   }
-  return { valid: valid.slice(0, OWNER_ADDRESS_CAP), invalid };
+  return { valid: valid.slice(0, cap), invalid };
 }

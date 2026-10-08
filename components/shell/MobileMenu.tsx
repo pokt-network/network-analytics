@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
-import { IconMenu2, IconX, IconWallet, IconExternalLink, IconSun, IconMoon } from '@tabler/icons-react';
+import { IconMenu2, IconX, IconWallet, IconServerBolt, IconExternalLink, IconSun, IconMoon } from '@tabler/icons-react';
 import { EXPLORER_BASE_URL } from '@/lib/app-config';
 import { TABS } from '@/components/dashboard/tabs';
 
@@ -127,6 +127,10 @@ export function MobileMenu() {
           <Link href="/owner-staking" role="menuitem" onClick={() => setOpen(false)} className={`${item} text-text-secondary hover:bg-bg-card-hover hover:text-text-primary`}>
             <IconWallet size={18} />
             Owner Staking
+          </Link>
+          <Link href="/operator-staking" role="menuitem" onClick={() => setOpen(false)} className={`${item} text-text-secondary hover:bg-bg-card-hover hover:text-text-primary`}>
+            <IconServerBolt size={18} />
+            Operator Staking
           </Link>
           <a href={EXPLORER_BASE_URL} target="_blank" rel="noopener noreferrer" role="menuitem" onClick={() => setOpen(false)} className={`${item} text-text-secondary hover:bg-bg-card-hover hover:text-text-primary`}>
             <IconExternalLink size={18} />

@@ -71,6 +71,17 @@ function fetchJson(url: string, visible: boolean): Promise<unknown> {
   return fetchShared(url).finally(endRequest);
 }
 
+/**
+ * Warm an endpoint in the background so a later useTabData(url) paints from cache instead of waiting.
+ * Idempotent and indicator-free: a no-op when the URL is already cached or in flight. Used to eagerly
+ * warm a tool's tabs in parallel once its inputs are known, so switching tabs feels instant even when
+ * the underlying indexer aggregation is slow on a cold miss.
+ */
+export function prefetch(url: string): void {
+  if (!url || cache.has(url) || inflight.has(url)) return;
+  fetchShared(url).catch(() => {});
+}
+
 /** Warm the same endpoint for the other ranges so a range toggle hits a warm client+server cache. */
 function prefetchSiblingRanges(url: string): void {
   const m = url.match(/[?&]range=([^&]+)/);
@@ -99,7 +110,12 @@ function maybePrefetchSiblings(url: string): void {
  * Serves cached data instantly on revisit, keeps prior data visible during a cold fetch (cleared if it fails), and reports
  * visible fetches to the global loading store so the shell can indicate activity.
  */
-export function useTabData<T>(url: string): State<T> {
+export function useTabData<T>(url: string, opts: { prefetchSiblings?: boolean } = {}): State<T> {
+  // Sibling-range prefetch keeps range toggles instant, but it fires a request per RANGE_KEY. For
+  // heavy endpoints (the operator tool's per-event resolvers, seconds each — and some ranges the
+  // indexer can't compute at all), that's wasteful and hammers the bottleneck, so callers opt out.
+  const doPrefetch = opts.prefetchSiblings !== false;
+
   const [state, setState] = useState<State<T>>(() => {
     const c = url ? cache.get(url) : undefined;
     return c ? { data: c.data as T, loading: false, error: null } : { data: null, loading: !!url, error: null };
@@ -121,7 +137,7 @@ export function useTabData<T>(url: string): State<T> {
       setState({ data: cached.data as T, loading: false, error: null });
       // Already client-cached (a revisit) → the server built this at least once; warm the siblings
       // unless the last observed server state was cold.
-      maybePrefetchSiblings(url);
+      if (doPrefetch) maybePrefetchSiblings(url);
       if (Date.now() - cached.ts > STALE_MS) {
         fetchJson(url, false)
           .then((json) => {
@@ -136,7 +152,7 @@ export function useTabData<T>(url: string): State<T> {
         .then((json) => {
           if (active) setState({ data: json as T, loading: false, error: null });
           // Only now is the primary's cache status known — prefetch siblings iff it wasn't a MISS.
-          maybePrefetchSiblings(url);
+          if (doPrefetch) maybePrefetchSiblings(url);
         })
         .catch((e: Error) => {
           // Drop the prior data: it belongs to the previous url and must not show under this one.
@@ -147,7 +163,7 @@ export function useTabData<T>(url: string): State<T> {
     return () => {
       active = false;
     };
-  }, [url]);
+  }, [url, doPrefetch]);
 
   return state;
 }

@@ -2,16 +2,18 @@ import { gqlFetch } from '@/lib/graphql';
 import { toDate } from '@/lib/time';
 import { UPOKT_PER_POKT } from '@/lib/config';
 import { NETWORK, type RangeKey } from '@/lib/app-config';
-import { rangeWindow, rangeTTL } from '@/lib/timeranges';
+import { rangeWindow, rangeTTL, fixedWindow } from '@/lib/timeranges';
 import {
   REWARDS_BY_ADDRESSES_TIME,
   REWARDS_BY_ADDRESS_DATE,
   REWARDS_BY_DATE_GROUPED,
   EVENT_CLAIM_SETTLEDS,
   OWNER_SETTLED_CLAIMS,
+  SUPPLIER_OWNER_SUMMARY,
 } from '@/lib/queries/analytics';
 import { num, parseScalar } from './_util';
 import { unwrapRange, notCovered, fillCoverage, type CoverageRange } from './coverage';
+import { fetchSuppliers, getMinStakeUpokt, statusClause, type StakeFilter, type SupplierListPage } from './suppliers-list';
 
 const toPokt = (u: number) => u / UPOKT_PER_POKT;
 
@@ -109,6 +111,57 @@ export async function getOwnerSettledClaims(addresses: string[], range: RangeKey
   return { count: (rows ?? []).reduce((s, r) => s + num(r.settled_claims), 0), range: covered };
 }
 
+/** Rewards over a fixed trailing window (e.g. 24h/48h for summary cards), independent of the selected
+ *  chart range. Rev-share-recipient keyed (the legacy settlement-table resolver); shared with the
+ *  Operator tool's summary cards. Returns POKT (null total → 0). */
+export async function getRewardsWindow(addresses: string[], seconds: number): Promise<number> {
+  const w = fixedWindow(seconds);
+  const data = await gqlFetch<{ legacyRewardsByAddressesAndTime: unknown }>(
+    NETWORK,
+    REWARDS_BY_ADDRESSES_TIME,
+    { addresses, start: w.startISO, end: w.endISO },
+    { revalidate: 600 },
+  );
+  return ownerTotal(data.legacyRewardsByAddressesAndTime).totalPokt ?? 0;
+}
+
+interface SupplierSummaryRaw {
+  totalCount: number;
+  aggregates: { sum: { stakeAmount: string | number | null } | null } | null;
+}
+
+export interface OwnerSummary {
+  supplierCount: number;
+  stakedPokt: number;
+}
+
+/** Fleet rollup for the Owner summary cards: how many suppliers each owner runs + combined stake.
+ *  Owner-keyed (suppliers.ownerId). Range-independent — the reward/claims cards come from /api/owner. */
+export async function getOwnerSummary(addresses: string[]): Promise<OwnerSummary> {
+  const data = await gqlFetch<{ suppliers: SupplierSummaryRaw | null }>(
+    NETWORK,
+    SUPPLIER_OWNER_SUMMARY,
+    { owners: addresses },
+    { revalidate: 1800 },
+  );
+  return {
+    supplierCount: data.suppliers?.totalCount ?? 0,
+    stakedPokt: toPokt(num(data.suppliers?.aggregates?.sum?.stakeAmount)),
+  };
+}
+
+/** Owner's suppliers (fleet), filtered by stake status. `below_min` needs the live min-stake param. */
+export async function getOwnerSuppliers(
+  addresses: string[],
+  filter: StakeFilter,
+  page: number,
+  pageSize = 25,
+): Promise<SupplierListPage> {
+  const minStake = filter === 'below_min' ? await getMinStakeUpokt() : 0;
+  const supplierFilter = { ownerId: { in: addresses }, ...statusClause(filter, minStake) };
+  return fetchSuppliers(supplierFilter, page, pageSize);
+}
+
 interface SettleRaw {
   serviceId: string;
   numRelays: string | number;
@@ -117,12 +170,17 @@ interface SettleRaw {
   mintRatio: string | number;
   transactionId: string | null;
   blockId: string | number;
-  supplierOwnerId: string;
+  supplierId: string;
+  supplierOwnerId: string | null;
+  supplier: { ownerId: string | null } | null;
 }
 
 export interface Issuance {
   block: number;
   serviceId: string;
+  /** Operator (node) address — the supplier that settled this claim. */
+  operator: string;
+  /** Owner of that supplier (from the relation; falls back to the denormalized scalar). */
   owner: string;
   relays: number;
   settledUpokt: number;
@@ -161,7 +219,8 @@ export async function getOwnerIssuances(
     rows: (d?.nodes ?? []).map((n) => ({
       block: num(n.blockId),
       serviceId: n.serviceId,
-      owner: n.supplierOwnerId,
+      operator: n.supplierId,
+      owner: n.supplier?.ownerId ?? n.supplierOwnerId ?? '',
       relays: num(n.numRelays),
       settledUpokt: num(n.settledAmount),
       mintedUpokt: num(n.mintedAmount),

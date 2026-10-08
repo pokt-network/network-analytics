@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { getOwnerIssuances, type IssuancePage } from '@/lib/data/owner';
-import { ADDRESS_RE } from '@/lib/owner-storage';
+import { ADDRESS_RE } from '@/lib/staking/addresses';
 import { OWNER_ADDRESS_CAP } from '@/lib/app-config';
 
 const PAGE_SIZE = 25;

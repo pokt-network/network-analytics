@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { IconChevronDown, IconWallet } from '@tabler/icons-react';
+import { IconChevronDown, IconWallet, IconServerBolt } from '@tabler/icons-react';
 
 // "Tools" nav dropdown. Owner Staking lives here (its own view), not as a peer dashboard tab.
 export function ToolsMenu() {
@@ -50,6 +50,15 @@ export function ToolsMenu() {
           >
             <IconWallet size={17} />
             Owner Staking
+          </Link>
+          <Link
+            href="/operator-staking"
+            role="menuitem"
+            onClick={() => setOpen(false)}
+            className="flex items-center gap-[9px] rounded-lg px-[11px] py-[9px] text-sm text-text-secondary no-underline transition-colors hover:bg-bg-card-hover hover:text-text-primary"
+          >
+            <IconServerBolt size={17} />
+            Operator Staking
           </Link>
         </div>
       )}
