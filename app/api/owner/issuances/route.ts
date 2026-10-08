@@ -22,13 +22,14 @@ export async function GET(req: NextRequest) {
   const page = Math.max(1, Number(req.nextUrl.searchParams.get('page')) || 1);
   const reqSize = Number(req.nextUrl.searchParams.get('pageSize'));
   const pageSize = Number.isFinite(reqSize) && reqSize > 0 ? Math.min(reqSize, MAX_PAGE_SIZE) : PAGE_SIZE;
-  // count=0 skips totalCount (the export reads it from its first page only).
-  const withCount = req.nextUrl.searchParams.get('count') !== '0';
+  // count=1 adds totalCount: a count over every settlement of the owners, ~15 s for a large one, so nothing asks for it
+  // by default (the view shows the range's count from the catalog and pages by full pages).
+  const withCount = req.nextUrl.searchParams.get('count') === '1';
   // after=<endCursor of the previous page> reads the rows that follow it (the export), instead of `page`.
   const after = req.nextUrl.searchParams.get('after') || null;
 
   if (addresses.length === 0) {
-    return NextResponse.json({ rows: [], totalCount: 0 } satisfies IssuancePage);
+    return NextResponse.json({ rows: [], totalCount: 0, hasNextPage: false } satisfies IssuancePage);
   }
   const result = await getOwnerIssuances(addresses, page, pageSize, withCount, after);
   return NextResponse.json(result);
