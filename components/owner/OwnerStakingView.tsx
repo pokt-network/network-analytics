@@ -80,19 +80,19 @@ export function OwnerStakingView() {
     try {
       const all: Issuance[] = [];
       let after: string | null = null;
-      let total = Infinity;
-      while (all.length < total && all.length < EXPORT_CAP) {
-        // the total is counted once, on the first page; the next pages follow the previous one's cursor
-        const next: string = after ? `&after=${encodeURIComponent(after)}&count=0` : '';
+      let more = true; // a full page may have rows after it; a short one is the last
+      while (more && all.length < EXPORT_CAP) {
+        // each page follows the previous one's cursor
+        const next: string = after ? `&after=${encodeURIComponent(after)}` : '';
         const res = await fetch(`/api/owner/issuances?addresses=${addrParam}&pageSize=${EXPORT_CHUNK}${next}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: IssuancePage = await res.json();
-        if (!after) total = data.totalCount ?? 0;
         all.push(...data.rows);
-        if (data.rows.length === 0 || !data.endCursor) break; // safety: nothing more to page through
-        after = data.endCursor;
+        more = data.rows.length === EXPORT_CHUNK && !!data.endCursor;
+        after = data.endCursor ?? null;
       }
       const rows = all.slice(0, EXPORT_CAP);
+      const capped = more || all.length > EXPORT_CAP;
       const headers = ['Block', 'Service', 'Owner', 'Relays', 'Settled (POKT)', 'Minted (POKT)', 'Mint Ratio', 'Transaction'];
       const body = rows.map((r) => [
         r.block,
@@ -106,8 +106,8 @@ export function OwnerStakingView() {
       ]);
       downloadCsv(csvFilename('reward-issuances'), toCsv(headers, body));
       setExportNote(
-        rows.length < total
-          ? `Exported the ${formatNumber(rows.length)} most recent of ${formatNumber(total)} settlements — the export is capped for performance.`
+        capped
+          ? `Exported the ${formatNumber(rows.length)} most recent settlements — the export is capped for performance.`
           : `Exported all ${formatNumber(rows.length)} settlements.`,
       );
     } catch {
@@ -127,8 +127,11 @@ export function OwnerStakingView() {
     ? [{ key: 'total', color: NETWORK_TOTAL_COLOR, label: 'All addresses' }]
     : addresses.map((a) => ({ key: a, color: colorFor.get(a)!, label: truncate(a, 8, 5) }));
 
-  const totalCount = issuances.data?.totalCount ?? 0;
-  const pages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const pageRows = issuances.data?.rows.length ?? 0;
+  // no total is counted (see the issuances route): a full page may have a next one
+  const hasNext = pageRows === PAGE_SIZE;
+  const hasRows = page > 1 || pageRows > 0;
+  const settledClaims = rewards.data?.settledClaims ?? null;
   const avgMintRatio = issuances.data?.rows?.[0]?.mintRatio ?? null;
 
   return (
@@ -179,7 +182,7 @@ export function OwnerStakingView() {
         <>
           <div className="mb-4 grid grid-cols-2 gap-4 md:grid-cols-4">
             <StatCard label={`Total Rewards (${range})`} value={rewards.data?.totalPokt != null ? formatCompact(rewards.data.totalPokt) : '—'} unit="POKT" icon={<IconCoin size={15} />} iconColor="var(--mint)" sub={totalNote} />
-            <StatCard label="Settlements" value={formatNumber(totalCount)} icon={<IconReceipt size={15} />} iconColor="var(--blue-soft)" sub="all-time" />
+            <StatCard label={`Settlements (${range})`} value={settledClaims != null ? formatNumber(settledClaims) : '—'} icon={<IconReceipt size={15} />} iconColor="var(--blue-soft)" sub={totalNote} />
             <StatCard label="Tracked Addresses" value={formatNumber(addresses.length)} icon={<IconUsers size={15} />} iconColor="var(--lavender)" />
             <StatCard label="Mint Ratio" value={avgMintRatio != null ? avgMintRatio.toFixed(3) : '—'} icon={<IconPercentage size={15} />} iconColor="var(--gold)" sub="latest settlement" />
           </div>
@@ -225,15 +228,13 @@ export function OwnerStakingView() {
                   <button
                     type="button"
                     onClick={exportIssuancesCsv}
-                    disabled={exporting || totalCount === 0}
+                    disabled={exporting || !hasRows}
                     title={
-                      totalCount === 0
+                      !hasRows
                         ? 'No settlements to download'
                         : exporting
                           ? 'Preparing CSV…'
-                          : totalCount <= EXPORT_CAP
-                            ? `Download all ${formatNumber(totalCount)} settlements as CSV`
-                            : `Download the ${formatNumber(EXPORT_CAP)} most recent of ${formatNumber(totalCount)} settlements as CSV`
+                          : `Download up to the ${formatNumber(EXPORT_CAP)} most recent settlements as CSV`
                     }
                     aria-label="Download CSV"
                     className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border bg-bg-card text-text-secondary transition-colors hover:enabled:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
@@ -292,10 +293,10 @@ export function OwnerStakingView() {
               </table>
             </div>
             <div className="mt-3.5 flex items-center justify-between gap-3 text-[13px] text-text-secondary">
-              <span>{formatNumber(totalCount)} settlements · page {page} of {formatNumber(pages)}</span>
+              <span>page {formatNumber(page)}</span>
               <div className="flex gap-1.5">
                 <button type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Prev</button>
-                <button type="button" disabled={page >= pages} onClick={() => setPage((p) => p + 1)} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>
+                <button type="button" disabled={!hasNext} onClick={() => setPage((p) => p + 1)} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>
               </div>
             </div>
             {exportNote && <p className="mt-3 text-[12px] text-text-secondary">{exportNote}</p>}

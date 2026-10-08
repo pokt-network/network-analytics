@@ -113,6 +113,13 @@ export const SERVICES_LIST = /* GraphQL */ `
 
 // ── Owner Staking (addresses are [String]) ──
 // legacy* = the getRewardsByAddressesAndTime* arguments and JSON, read from the settlement tables.
+// Settled claims of the owners' suppliers in [start, end), from the settlement catalog (one aggregate row).
+export const OWNER_SETTLED_CLAIMS = /* GraphQL */ `
+  query ownerSettledClaims($owners: [String], $start: Datetime!, $end: Datetime!) {
+    getSupplierEarningsJson(suppliers: null, rangeStart: $start, rangeEnd: $end, bySupplier: false, owners: $owners)
+  }
+`;
+
 export const REWARDS_BY_ADDRESSES_TIME = /* GraphQL */ `
   query rewardsByAddressesTime($addresses: [String], $start: Datetime, $end: Datetime) {
     legacyRewardsByAddressesAndTime(addresses: $addresses, startDate: $start, endDate: $end)

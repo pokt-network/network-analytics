@@ -8,6 +8,7 @@ import {
   REWARDS_BY_ADDRESS_DATE,
   REWARDS_BY_DATE_GROUPED,
   EVENT_CLAIM_SETTLEDS,
+  OWNER_SETTLED_CLAIMS,
 } from '@/lib/queries/analytics';
 import { num, parseScalar } from './_util';
 import { unwrapRange, notCovered, fillCoverage, type CoverageRange } from './coverage';
@@ -90,6 +91,21 @@ export function ownerTotal(field: unknown): { totalPokt: number | null; range: C
   const total = unwrapRange<unknown>(parseScalar(field), true);
   const v = typeof total.data === 'string' ? (/^-?\d+(\.\d+)?$/.test(total.data) ? Number(total.data) : null) : total.data;
   return { totalPokt: notCovered(total.range) || typeof v !== 'number' || !Number.isFinite(v) ? null : toPokt(v), range: total.range };
+}
+
+/** Settled claims of the owners' suppliers in the range, from the settlement catalog; null ("—", never 0) when
+ *  nothing in the range is covered. Counting the raw settlement events instead took ~15 s for a large owner. */
+export async function getOwnerSettledClaims(addresses: string[], range: RangeKey): Promise<{ count: number | null; range: CoverageRange | null }> {
+  const w = rangeWindow(range);
+  const data = await gqlFetch<{ getSupplierEarningsJson: unknown }>(
+    NETWORK,
+    OWNER_SETTLED_CLAIMS,
+    { owners: addresses, start: w.startISO, end: w.endISO },
+    { revalidate: rangeTTL(range) },
+  );
+  const { data: rows, range: covered } = unwrapRange<Array<{ settled_claims: string | number }>>(parseScalar(data.getSupplierEarningsJson), true);
+  if (notCovered(covered)) return { count: null, range: covered };
+  return { count: (rows ?? []).reduce((s, r) => s + num(r.settled_claims), 0), range: covered };
 }
 
 interface SettleRaw {
