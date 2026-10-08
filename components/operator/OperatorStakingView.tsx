@@ -25,9 +25,12 @@ const STORE_KEY = 'pnf-analytics-operator-addresses';
 // caps at 30d and skips sibling-range prefetch (each range is a multi-second indexer statement).
 const OPERATOR_RANGES: RangeKey[] = ['24h', '7d', '30d'];
 
+// Rewards by Service is first and the default: Claim/Proof is the slowest cold aggregation (often
+// 10s+ for a large fleet), so opening on it leaves the user watching a load screen the longest. All
+// tabs are prefetched in parallel on mount, so Claim/Proof is usually warm by the time it's clicked.
 const TABS: TabDef[] = [
-  { key: 'claim_proof', label: 'Claim / Proof', icon: <IconChartBar size={15} /> },
   { key: 'rewards_by_service', label: 'Rewards by Service', icon: <IconCoin size={15} /> },
+  { key: 'claim_proof', label: 'Claim / Proof', icon: <IconChartBar size={15} /> },
   { key: 'overserviced', label: 'Overserviced', icon: <IconChartArea size={15} /> },
   { key: 'slashing', label: 'Slashing', icon: <IconReceipt size={15} /> },
   { key: 'suppliers', label: 'Suppliers', icon: <IconUsers size={15} /> },
@@ -57,7 +60,7 @@ export function OperatorStakingView() {
 
 function OperatorBody() {
   const { addresses, range } = useStakingTool();
-  const [tab, setTab] = useState('claim_proof');
+  const [tab, setTab] = useState('rewards_by_service');
 
   const addrParam = addresses.join(',');
   const summary = useTabData<OperatorSummary>(addrParam ? `/api/operator/summary?addresses=${addrParam}` : '');

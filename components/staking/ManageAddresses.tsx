@@ -1,16 +1,15 @@
 'use client';
 
 import { useState } from 'react';
-import { IconListCheck, IconCopy, IconCheck, IconX } from '@tabler/icons-react';
+import { IconListCheck, IconCopy, IconCheck } from '@tabler/icons-react';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { useStakingTool } from './StakingToolContext';
 import { parseAddressInput } from '@/lib/staking/addresses';
-import { truncate } from '@/lib/format';
 
 // Shared address input for both staking tools. The primary action is inset in the textarea's
-// bottom-right (poktscan-style); the entered addresses appear below as a removable "Selected
-// Addresses" set — each pill carries its series-color dot and an ✕ to drop it, so the list reads as
-// the live filter set rather than a static label strip. Adding merges into the existing set.
+// bottom-right (poktscan-style); adding merges into the existing set. The tracked addresses themselves
+// are shown as a color legend beside the rewards chart (RewardsOverTimeCard), where each sits next to
+// its line — not as a disconnected pill strip here.
 export function ManageAddresses({
   actionLabel = 'View Rewards',
   placeholder,
@@ -18,7 +17,7 @@ export function ManageAddresses({
   actionLabel?: string;
   placeholder?: string;
 }) {
-  const { addresses, setAddresses, cap, colorFor } = useStakingTool();
+  const { addresses, setAddresses, cap } = useStakingTool();
   const [input, setInput] = useState('');
   const [dropped, setDropped] = useState(0);
   const [copied, setCopied] = useState(false);
@@ -32,10 +31,6 @@ export function ManageAddresses({
     setAddresses(merged.slice(0, cap));
     setDropped(invalid.length);
     setInput('');
-  }
-
-  function remove(addr: string) {
-    setAddresses(addresses.filter((a) => a !== addr));
   }
 
   function clearAll() {
@@ -113,34 +108,6 @@ export function ManageAddresses({
           </div>
         )}
       </div>
-
-      {addresses.length > 0 && (
-        <div className="mt-3.5 border-t pt-3.5">
-          <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.5px] text-text-secondary">
-            Selected Addresses
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {addresses.map((a) => (
-              <span
-                key={a}
-                className="inline-flex items-center gap-1.5 rounded-full border bg-bg-surface py-1 pl-2.5 pr-1.5 font-mono text-[12px] text-text-secondary"
-              >
-                <span className="h-2 w-2 shrink-0 rounded-sm" style={{ background: colorFor(a) }} />
-                {truncate(a, 8, 5)}
-                <button
-                  type="button"
-                  onClick={() => remove(a)}
-                  aria-label={`Remove ${a}`}
-                  title="Remove"
-                  className="grid h-[18px] w-[18px] place-items-center rounded-full text-text-tertiary transition-colors hover:bg-bg-card-hover hover:text-coral"
-                >
-                  <IconX size={12} />
-                </button>
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
     </Card>
   );
 }
