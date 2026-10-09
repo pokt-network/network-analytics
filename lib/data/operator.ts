@@ -5,12 +5,14 @@ import { NETWORK, type RangeKey } from '@/lib/app-config';
 import { rangeWindow, rangeTTL } from '@/lib/timeranges';
 import {
   OPERATOR_SUPPLIER_SUMMARY,
-  CLAIM_PROOFS_BY_DELEGATORS,
+  OPERATOR_CLAIMS_SETTLED,
+  OPERATOR_CLAIM_PENALTIES,
   REWARDS_BY_ADDRESSES_SERVICE,
   OVERSERVICED_BY_ADDRESSES,
   SUPPLIER_SLASHES,
 } from '@/lib/queries/analytics';
 import { num, parseScalar } from './_util';
+import { unwrapRange, fillCoverage, type CoverageRange } from './coverage';
 import { getRewardsWindow } from './owner';
 import { fetchSuppliers, type SupplierListPage } from './suppliers-list';
 
@@ -70,36 +72,68 @@ export async function getOperatorSuppliers(addresses: string[], page: number, pa
 }
 
 // ── Claim / Proof comparison ──
-interface ClaimProofRaw {
-  date: string;
-  claim_amount: number | string;
-  proof_amount: number | string;
-  expired_proof_amount: number | string;
+interface SettledBucketRaw {
+  bucket_start: string;
+  settled_claims: number | string | null;
+}
+
+interface PenaltyBucketRaw {
+  bucket_start: string;
+  kind: string;
+  events: number | string | null;
 }
 
 export interface ClaimProofPoint {
   date: string;
-  claims: number;
-  proofs: number;
-  expired: number;
+  claims: number | null;
+  proofs: number | null;
+  expired: number | null;
 }
 
-export async function getOperatorClaimProofs(addresses: string[], range: RangeKey): Promise<ClaimProofPoint[]> {
+export interface ClaimProofs {
+  points: ClaimProofPoint[];
+  range: CoverageRange | null;
+}
+
+/** Claims per bucket of the suppliers that share revenue with the addresses now, by the block the chain closed them in,
+ *  from the settlement catalog: `proofs` the settled ones, `expired` the expired ones, `claims` every one closed
+ *  (settled, expired or discarded). A bucket with nothing covered is null, never 0. */
+export async function getOperatorClaimProofs(addresses: string[], range: RangeKey): Promise<ClaimProofs> {
   const w = rangeWindow(range);
-  const data = await gqlFetch<{ getClaimProofsDataByDelegatorsAndTime: unknown }>(
-    NETWORK,
-    CLAIM_PROOFS_BY_DELEGATORS,
-    { addresses, start: w.startISO, end: w.endISO, interval: w.interval },
-    { revalidate: rangeTTL(range) },
-  );
-  return parseScalar<ClaimProofRaw[]>(data.getClaimProofsDataByDelegatorsAndTime)
-    .map((r) => ({
-      date: toDate(r.date)?.toISOString() ?? r.date,
-      claims: num(r.claim_amount),
-      proofs: num(r.proof_amount),
-      expired: num(r.expired_proof_amount),
-    }))
-    .sort((a, b) => a.date.localeCompare(b.date));
+  const vars = { operators: addresses, start: w.startISO, end: w.endISO, bucket: w.interval };
+  const opts = { revalidate: rangeTTL(range) };
+  const [earned, penalized] = await Promise.all([
+    gqlFetch<{ getSupplierEarningsJson: unknown }>(NETWORK, OPERATOR_CLAIMS_SETTLED, vars, opts),
+    gqlFetch<{ getSupplierPenaltiesJson: unknown }>(NETWORK, OPERATOR_CLAIM_PENALTIES, vars, opts),
+  ]);
+  const settled = unwrapRange<SettledBucketRaw[]>(parseScalar(earned.getSupplierEarningsJson), false);
+  const penalties = unwrapRange<PenaltyBucketRaw[]>(parseScalar(penalized.getSupplierPenaltiesJson), false);
+  const byDate = new Map<string, { date: string; claims: number; proofs: number; expired: number }>();
+  const at = (bucket: string) => {
+    const date = toDate(bucket)?.toISOString() ?? bucket;
+    let row = byDate.get(date);
+    if (!row) {
+      row = { date, claims: 0, proofs: 0, expired: 0 };
+      byDate.set(date, row);
+    }
+    return row;
+  };
+  for (const r of settled.data ?? []) {
+    const row = at(r.bucket_start);
+    row.proofs += num(r.settled_claims);
+    row.claims += num(r.settled_claims);
+  }
+  for (const r of penalties.data ?? []) {
+    if (r.kind !== 'expired' && r.kind !== 'discarded') continue;
+    const row = at(r.bucket_start);
+    if (r.kind === 'expired') row.expired += num(r.events);
+    row.claims += num(r.events);
+  }
+  const rows = [...byDate.keys()].sort().map((d) => byDate.get(d)!);
+  return {
+    points: fillCoverage(rows, ['claims', 'proofs', 'expired'], settled.range, w.interval) as unknown as ClaimProofPoint[],
+    range: settled.range,
+  };
 }
 
 // ── Rewards by service ──
@@ -121,15 +155,23 @@ export interface ServiceRewardRow {
   netPokt: number;
 }
 
-export async function getOperatorRewardsByService(addresses: string[], range: RangeKey): Promise<ServiceRewardRow[]> {
+export interface ServiceRewards {
+  rows: ServiceRewardRow[];
+  range: CoverageRange | null;
+}
+
+/** Rewards per service paid to the addresses in the range, read from the settlement tables (the legacy_ resolver: the
+ *  getRewardsByAddressesAndTimeGroupByService JSON, each claim counted once). */
+export async function getOperatorRewardsByService(addresses: string[], range: RangeKey): Promise<ServiceRewards> {
   const w = rangeWindow(range);
-  const data = await gqlFetch<{ getRewardsByAddressesAndTimeGroupByService: unknown }>(
+  const data = await gqlFetch<{ legacyRewardsByAddressesAndTimeGroupByService: unknown }>(
     NETWORK,
     REWARDS_BY_ADDRESSES_SERVICE,
     { addresses, start: w.startISO, end: w.endISO },
     { revalidate: rangeTTL(range) },
   );
-  return parseScalar<RewardsServiceRaw[]>(data.getRewardsByAddressesAndTimeGroupByService)
+  const { data: raw, range: covered } = unwrapRange<RewardsServiceRaw[]>(parseScalar(data.legacyRewardsByAddressesAndTimeGroupByService), true);
+  const rows = (raw ?? [])
     .map((r) => ({
       serviceId: r.service_id,
       relays: num(r.relays),
@@ -138,6 +180,7 @@ export async function getOperatorRewardsByService(addresses: string[], range: Ra
       netPokt: toPokt(num(r.net_rewards)),
     }))
     .sort((a, b) => b.grossPokt - a.grossPokt);
+  return { rows, range: covered };
 }
 
 // ── Overserviced (expected vs effective burn) ──
