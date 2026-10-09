@@ -4,7 +4,7 @@ import { IconChartBar } from '@tabler/icons-react';
 import { useStakingTool } from '@/components/staking/StakingToolContext';
 import { useTabData } from '@/lib/use-tab-data';
 import type { ClaimProofs } from '@/lib/data/operator';
-import { rangeNote } from '@/lib/data/coverage';
+import { notCovered, rangeNote } from '@/lib/data/coverage';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { GroupedBarChart } from '@/components/charts/GroupedBarChart';
 import { ChartSkeleton, EmptyState, ErrorState } from '@/components/ui/states';
@@ -31,15 +31,17 @@ export function ClaimProofTab() {
     <Card>
       <CardHeader title="Claims / Proofs / Expired" icon={<IconChartBar size={18} />} right={<span className="text-[12px] text-text-tertiary">claims closed</span>} />
       {d.error && !d.data ? (
-        <ErrorState>Couldn&apos;t load claim activity for this range — try a shorter range.</ErrorState>
+        <ErrorState>Couldn&apos;t load claim activity for this range.</ErrorState>
       ) : !d.data ? (
         <ChartSkeleton height={300} />
+      ) : notCovered(d.data.range) ? (
+        <EmptyState>No data indexed for this window.</EmptyState>
       ) : d.data.points.length === 0 ? (
         <EmptyState>No claim activity in this window.</EmptyState>
       ) : (
         <GroupedBarChart data={d.data.points as unknown as Array<Record<string, number | string>>} bars={BARS} interval={range === '24h' ? 'hour' : 'day'} height={300} yFmt={(n) => formatNumber(n)} />
       )}
-      {coverageNote && <p className="mt-3 text-[12px] text-text-tertiary">{coverageNote}</p>}
+      {coverageNote && !notCovered(d.data?.range ?? null) && <p className="mt-3 text-[12px] text-text-tertiary">{coverageNote}</p>}
     </Card>
   );
 }

@@ -4,7 +4,7 @@ import { IconCoin, IconDownload } from '@tabler/icons-react';
 import { useStakingTool } from '@/components/staking/StakingToolContext';
 import { useTabData } from '@/lib/use-tab-data';
 import type { ServiceRewards } from '@/lib/data/operator';
-import { rangeNote } from '@/lib/data/coverage';
+import { notCovered, rangeNote } from '@/lib/data/coverage';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { ChartSkeleton, EmptyState, ErrorState } from '@/components/ui/states';
 import { formatNumber, formatCompact } from '@/lib/format';
@@ -47,7 +47,7 @@ export function RewardsByServiceTab() {
         }
       />
       {d.error && !d.data ? (
-        <ErrorState>Couldn&apos;t load service rewards for this range — try a shorter range.</ErrorState>
+        <ErrorState>Couldn&apos;t load service rewards for this range.</ErrorState>
       ) : !d.data ? (
         <>
           <ChartSkeleton height={260} />
@@ -55,6 +55,8 @@ export function RewardsByServiceTab() {
             First load aggregates rewards across your suppliers — this can take a few seconds.
           </p>
         </>
+      ) : notCovered(d.data.range) ? (
+        <EmptyState>No data indexed for this window.</EmptyState>
       ) : rows.length === 0 ? (
         <EmptyState>No service rewards in this window.</EmptyState>
       ) : (
@@ -83,7 +85,7 @@ export function RewardsByServiceTab() {
           </table>
         </div>
       )}
-      {coverageNote && <p className="mt-3 text-[12px] text-text-tertiary">{coverageNote}</p>}
+      {coverageNote && !notCovered(d.data?.range ?? null) && <p className="mt-3 text-[12px] text-text-tertiary">{coverageNote}</p>}
     </Card>
   );
 }

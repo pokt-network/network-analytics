@@ -20,8 +20,9 @@ import { SuppliersTab } from './SuppliersTab';
 
 const STORE_KEY = 'pnf-analytics-operator-addresses';
 
-// Every tab reads the settlement catalog / tables (about 1 s for a 1000-supplier fleet at 60d), so the tool offers
-// every range; sibling-range prefetch stays off (each range is still one indexer statement per tab).
+// Claim/Proof and Rewards by Service read the settlement catalog / tables; with Overserviced, each answered in about 1 s
+// for a 1055-supplier operator at 24h, 7d, 30d and 60d (measured 2026-10-09), so the tool offers every range. Sibling-range
+// prefetch stays off (each range is still one indexer statement per tab).
 const OPERATOR_RANGES: RangeKey[] = [...RANGE_KEYS];
 
 // Rewards by Service is first and the default. All tabs are prefetched in parallel on mount.
