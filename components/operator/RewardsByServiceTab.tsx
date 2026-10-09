@@ -3,7 +3,8 @@
 import { IconCoin, IconDownload } from '@tabler/icons-react';
 import { useStakingTool } from '@/components/staking/StakingToolContext';
 import { useTabData } from '@/lib/use-tab-data';
-import type { ServiceRewardRow } from '@/lib/data/operator';
+import type { ServiceRewards } from '@/lib/data/operator';
+import { rangeNote } from '@/lib/data/coverage';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { ChartSkeleton, EmptyState, ErrorState } from '@/components/ui/states';
 import { formatNumber, formatCompact } from '@/lib/format';
@@ -13,11 +14,12 @@ import { toCsv, downloadCsv, csvFilename } from '@/lib/csv';
 // what the addresses actually received after rev-share splits (mod-to-account transfers).
 export function RewardsByServiceTab() {
   const { addresses, range } = useStakingTool();
-  const d = useTabData<ServiceRewardRow[]>(
+  const d = useTabData<ServiceRewards>(
     addresses.length ? `/api/operator/rewards-by-service?addresses=${addresses.join(',')}&range=${range}` : '',
     { prefetchSiblings: false },
   );
-  const rows = d.data ?? [];
+  const rows = d.data?.rows ?? [];
+  const coverageNote = d.error ? null : rangeNote(d.data?.range ?? null, range === '24h' ? 'hour' : 'day');
 
   function exportCsv() {
     if (rows.length === 0) return;
@@ -81,6 +83,7 @@ export function RewardsByServiceTab() {
           </table>
         </div>
       )}
+      {coverageNote && <p className="mt-3 text-[12px] text-text-tertiary">{coverageNote}</p>}
     </Card>
   );
 }

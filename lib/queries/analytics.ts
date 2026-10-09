@@ -192,8 +192,8 @@ export const SUPPLIER_OWNER_SUMMARY = /* GraphQL */ `
 // The Operator tool's addresses are the rev-share / node-runner addresses that appear in a supplier's
 // serviceConfig.revShare. The fleet rollup + slashes are therefore scoped by a SupplierFilter built
 // in lib/data/operator.ts (an OR of per-address `serviceConfigs.some.revShare.contains`), passed as a
-// typed variable rather than string-built. The claim/proof, rewards-by-service, and overserviced
-// resolvers take the rev-share addresses directly.
+// typed variable rather than string-built. The rewards-by-service and overserviced resolvers take the
+// rev-share addresses directly; the claim/proof ones take them as the catalog's `operators`.
 
 export const OPERATOR_SUPPLIER_SUMMARY = /* GraphQL */ `
   query operatorSupplierSummary($filter: SupplierFilter!) {
@@ -208,15 +208,23 @@ export const OPERATOR_SUPPLIER_SUMMARY = /* GraphQL */ `
   }
 `;
 
-export const CLAIM_PROOFS_BY_DELEGATORS = /* GraphQL */ `
-  query claimProofsByDelegators($addresses: [String!], $start: Datetime, $end: Datetime, $interval: String) {
-    getClaimProofsDataByDelegatorsAndTime(addresses: $addresses, startTs: $start, endTs: $end, truncInterval: $interval)
+// Settled and expired/discarded claims per bucket of the suppliers that share revenue with the operators now, from the
+// settlement catalog (one aggregate series each).
+export const OPERATOR_CLAIMS_SETTLED = /* GraphQL */ `
+  query operatorClaimsSettled($operators: [String], $start: Datetime!, $end: Datetime!, $bucket: String) {
+    getSupplierEarningsJson(suppliers: null, rangeStart: $start, rangeEnd: $end, bucket: $bucket, bySupplier: false, operators: $operators)
+  }
+`;
+
+export const OPERATOR_CLAIM_PENALTIES = /* GraphQL */ `
+  query operatorClaimPenalties($operators: [String], $start: Datetime!, $end: Datetime!, $bucket: String) {
+    getSupplierPenaltiesJson(suppliers: null, rangeStart: $start, rangeEnd: $end, bucket: $bucket, bySupplier: false, operators: $operators)
   }
 `;
 
 export const REWARDS_BY_ADDRESSES_SERVICE = /* GraphQL */ `
-  query rewardsByAddressesService($addresses: [String!], $start: Datetime, $end: Datetime) {
-    getRewardsByAddressesAndTimeGroupByService(addresses: $addresses, startTs: $start, endTs: $end)
+  query rewardsByAddressesService($addresses: [String], $start: Datetime, $end: Datetime) {
+    legacyRewardsByAddressesAndTimeGroupByService(addresses: $addresses, startTs: $start, endTs: $end)
   }
 `;
 

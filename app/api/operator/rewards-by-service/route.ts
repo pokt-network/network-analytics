@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { getOperatorRewardsByService, type ServiceRewardRow } from '@/lib/data/operator';
+import { getOperatorRewardsByService, type ServiceRewards } from '@/lib/data/operator';
 import { ADDRESS_RE } from '@/lib/staking/addresses';
 import { DEFAULT_RANGE, isRangeKey, OWNER_ADDRESS_CAP, type RangeKey } from '@/lib/app-config';
 
@@ -12,6 +12,6 @@ export async function GET(req: NextRequest) {
   const addresses = parseAddrs(req.nextUrl.searchParams.get('addresses'));
   const rangeParam = req.nextUrl.searchParams.get('range');
   const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
-  if (addresses.length === 0) return NextResponse.json([] as ServiceRewardRow[]);
+  if (addresses.length === 0) return NextResponse.json({ rows: [], range: null } satisfies ServiceRewards);
   return NextResponse.json(await getOperatorRewardsByService(addresses, range));
 }
