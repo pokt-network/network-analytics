@@ -267,11 +267,16 @@ export const SUPPLIER_MIN_STAKE = /* GraphQL */ `
 `;
 
 // Supplier slashing events scoped to the operator's suppliers (filter built from the rev-share
-// addresses). proofValidationStatus can be null; sessionId can be empty.
+// addresses) and to a range (blockId from FIRST_BLOCK_SINCE). proofValidationStatus can be null; sessionId can be empty.
 export const SUPPLIER_SLASHES = /* GraphQL */ `
   query supplierSlashes($filter: EventSupplierSlashedFilter!, $first: Int, $offset: Int) {
     eventSupplierSlasheds(filter: $filter, orderBy: BLOCK_ID_DESC, first: $first, offset: $offset) {
       totalCount
+      aggregates {
+        sum {
+          proofMissingPenalty
+        }
+      }
       nodes {
         supplierId
         blockId
@@ -281,6 +286,17 @@ export const SUPPLIER_SLASHES = /* GraphQL */ `
         proofValidationStatus
         serviceId
         applicationId
+      }
+    }
+  }
+`;
+
+// The first block at or after a timestamp: a range's start as a height, so a list can filter on its blockId index.
+export const FIRST_BLOCK_SINCE = /* GraphQL */ `
+  query firstBlockSince($since: Datetime!) {
+    blocks(filter: { timestamp: { greaterThanOrEqualTo: $since } }, orderBy: ID_ASC, first: 1) {
+      nodes {
+        id
       }
     }
   }

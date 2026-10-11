@@ -16,20 +16,21 @@ const PAGE_SIZE = 25;
 const EXPORT_CAP = 5000;
 const EXPORT_CHUNK = 100;
 
-// Supplier slashing events (proof-missing penalties) for the operator's suppliers.
+// Supplier slashing events (proof-missing penalties) for the operator's suppliers, in the view's range.
 export function SlashingTab() {
-  const { addresses } = useStakingTool();
+  const { addresses, range } = useStakingTool();
   const [page, setPage] = useState(1);
   const [exporting, setExporting] = useState(false);
 
   const addrParam = addresses.join(',');
-  const [prevAddr, setPrevAddr] = useState(addrParam);
-  if (prevAddr !== addrParam) {
-    setPrevAddr(addrParam);
+  const query = `addresses=${addrParam}&range=${range}`;
+  const [prevQuery, setPrevQuery] = useState(query);
+  if (prevQuery !== query) {
+    setPrevQuery(query);
     setPage(1);
   }
 
-  const d = useTabData<SlashPage>(addresses.length ? `/api/operator/slashing?addresses=${addrParam}&page=${page}` : '');
+  const d = useTabData<SlashPage>(addresses.length ? `/api/operator/slashing?${query}&page=${page}` : '');
   const totalCount = d.data?.totalCount ?? 0;
   const pages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
@@ -41,7 +42,7 @@ export function SlashingTab() {
       let p = 1;
       let total = Infinity;
       while (all.length < total && all.length < EXPORT_CAP) {
-        const res = await fetch(`/api/operator/slashing?addresses=${addrParam}&page=${p}&pageSize=${EXPORT_CHUNK}`);
+        const res = await fetch(`/api/operator/slashing?${query}&page=${p}&pageSize=${EXPORT_CHUNK}`);
         if (!res.ok) break;
         const data: SlashPage = await res.json();
         total = data.totalCount ?? 0;
@@ -86,14 +87,9 @@ export function SlashingTab() {
         }
       />
       {!d.data ? (
-        <>
-          <ChartSkeleton height={200} />
-          <p className="mt-3 text-center text-[12px] text-text-tertiary">
-            First load scans slashing events across your suppliers — this can take a few seconds.
-          </p>
-        </>
+        <ChartSkeleton height={200} />
       ) : totalCount === 0 ? (
-        <EmptyState>No slashing events for these addresses.</EmptyState>
+        <EmptyState>No slashing events for these addresses in the last {range}.</EmptyState>
       ) : (
         <>
           <div className="overflow-x-auto">
@@ -130,7 +126,10 @@ export function SlashingTab() {
             </table>
           </div>
           <div className="mt-3.5 flex items-center justify-between gap-3 text-[13px] text-text-secondary">
-            <span>{formatNumber(totalCount)} slashing events · page {page} of {formatNumber(pages)}</span>
+            <span>
+              {formatNumber(totalCount)} slashing events in the last {range} · {formatPokt(d.data.penaltyUpokt)} POKT in penalties · page {page} of{' '}
+              {formatNumber(pages)}
+            </span>
             <div className="flex gap-1.5">
               <button type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Prev</button>
               <button type="button" disabled={page >= pages} onClick={() => setPage((p) => p + 1)} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>
