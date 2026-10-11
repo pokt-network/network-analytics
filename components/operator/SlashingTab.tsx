@@ -88,6 +88,8 @@ export function SlashingTab() {
       />
       {!d.data ? (
         <ChartSkeleton height={200} />
+      ) : !d.data.indexed ? (
+        <EmptyState>The indexer has not reached the last {range} yet.</EmptyState>
       ) : totalCount === 0 ? (
         <EmptyState>No slashing events for these addresses in the last {range}.</EmptyState>
       ) : (
@@ -127,7 +129,7 @@ export function SlashingTab() {
           </div>
           <div className="mt-3.5 flex items-center justify-between gap-3 text-[13px] text-text-secondary">
             <span>
-              {formatNumber(totalCount)} slashing events in the last {range} · {formatPokt(d.data.penaltyUpokt)} POKT in penalties · page {page} of{' '}
+              {formatNumber(totalCount)} slashing events in the last {range} · {formatPokt(d.data.penaltyUpokt, 6)} POKT in penalties · page {page} of{' '}
               {formatNumber(pages)}
             </span>
             <div className="flex gap-1.5">

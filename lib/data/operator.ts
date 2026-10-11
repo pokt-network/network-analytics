@@ -239,9 +239,11 @@ export interface SlashRow {
 
 export interface SlashPage {
   rows: SlashRow[];
-  /** Slashing events in the range, and the sum of their penalties. */
+  /** Slashing events in the range, and the sum of their penalties (exact, as the indexer's decimal string). */
   totalCount: number;
-  penaltyUpokt: number;
+  penaltyUpokt: string;
+  /** False when the indexer has no block in the range yet: not indexed, which is not the same as no slashing. */
+  indexed: boolean;
 }
 
 /** The operator's suppliers' slashing events in a range (from its first block on), newest first, with the range's
@@ -254,7 +256,7 @@ export async function getOperatorSlashes(addresses: string[], range: RangeKey, p
     { revalidate: rangeTTL(range) },
   );
   const fromBlock = since.blocks?.nodes?.[0]?.id;
-  if (fromBlock == null) return { rows: [], totalCount: 0, penaltyUpokt: 0 };
+  if (fromBlock == null) return { rows: [], totalCount: 0, penaltyUpokt: '0', indexed: false };
   const data = await gqlFetch<{
     eventSupplierSlasheds: { totalCount: number; aggregates: { sum: { proofMissingPenalty: string | null } | null } | null; nodes: SlashRaw[] } | null;
   }>(
@@ -270,7 +272,8 @@ export async function getOperatorSlashes(addresses: string[], range: RangeKey, p
   const d = data.eventSupplierSlasheds;
   return {
     totalCount: d?.totalCount ?? 0,
-    penaltyUpokt: num(d?.aggregates?.sum?.proofMissingPenalty),
+    penaltyUpokt: d?.aggregates?.sum?.proofMissingPenalty ?? '0',
+    indexed: true,
     rows: (d?.nodes ?? []).map((n) => ({
       supplier: n.supplierId,
       block: num(n.blockId),

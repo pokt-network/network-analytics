@@ -19,6 +19,6 @@ export async function GET(req: NextRequest) {
   const rangeParam = req.nextUrl.searchParams.get('range');
   const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
 
-  if (addresses.length === 0) return NextResponse.json({ rows: [], totalCount: 0, penaltyUpokt: 0 } satisfies SlashPage);
+  if (addresses.length === 0) return NextResponse.json({ rows: [], totalCount: 0, penaltyUpokt: '0', indexed: true } satisfies SlashPage);
   return NextResponse.json(await getOperatorSlashes(addresses, range, page, pageSize));
 }
