@@ -10,6 +10,7 @@ import {
   REWARDS_BY_ADDRESSES_SERVICE,
   OVERSERVICED_BY_ADDRESSES,
   SUPPLIER_SLASHES,
+  FIRST_BLOCK_SINCE,
 } from '@/lib/queries/analytics';
 import { num, parseScalar } from './_util';
 import { unwrapRange, fillCoverage, type CoverageRange } from './coverage';
@@ -23,13 +24,13 @@ const toPokt = (u: number) => u / UPOKT_PER_POKT;
 
 // The Operator tool's addresses are rev-share recipients. A supplier "belongs to" an operator if any
 // of the operator's addresses appears in a serviceConfig's revShare. This builds the SupplierFilter
-// (an OR of per-address JSONB containment checks) that both the fleet summary and the slashing feed
-// scope to. Passed as a typed GraphQL variable (SupplierFilter) rather than string-interpolated.
+// (one serviceConfigs `some` holding an OR of per-address JSONB containment checks) that the fleet summary,
+// the supplier list and the slashing feed scope to. The OR goes inside `some`: one OR of a `some` per address
+// becomes one EXISTS per address in SQL, which with 7 addresses took 2.4–3.4 s against 1.1–2.0 s for the same rows.
+// Passed as a typed GraphQL variable (SupplierFilter) rather than string-interpolated.
 function revShareSupplierFilter(addresses: string[]): Record<string, unknown> {
   return {
-    or: addresses.map((address) => ({
-      serviceConfigs: { some: { revShare: { contains: [{ address }] } } },
-    })),
+    serviceConfigs: { some: { or: addresses.map((address) => ({ revShare: { contains: [{ address }] } })) } },
   };
 }
 
@@ -238,19 +239,41 @@ export interface SlashRow {
 
 export interface SlashPage {
   rows: SlashRow[];
+  /** Slashing events in the range, and the sum of their penalties (exact, as the indexer's decimal string). */
   totalCount: number;
+  penaltyUpokt: string;
+  /** False when the indexer has no block in the range yet: not indexed, which is not the same as no slashing. */
+  indexed: boolean;
 }
 
-export async function getOperatorSlashes(addresses: string[], page: number, pageSize = 25): Promise<SlashPage> {
-  const data = await gqlFetch<{ eventSupplierSlasheds: { totalCount: number; nodes: SlashRaw[] } | null }>(
+/** The operator's suppliers' slashing events in a range (from its first block on), newest first, with the range's
+ *  count and penalty sum. */
+export async function getOperatorSlashes(addresses: string[], range: RangeKey, page: number, pageSize = 25): Promise<SlashPage> {
+  const since = await gqlFetch<{ blocks: { nodes: { id: string }[] } | null }>(
+    NETWORK,
+    FIRST_BLOCK_SINCE,
+    { since: rangeWindow(range).startISO },
+    { revalidate: rangeTTL(range) },
+  );
+  const fromBlock = since.blocks?.nodes?.[0]?.id;
+  if (fromBlock == null) return { rows: [], totalCount: 0, penaltyUpokt: '0', indexed: false };
+  const data = await gqlFetch<{
+    eventSupplierSlasheds: { totalCount: number; aggregates: { sum: { proofMissingPenalty: string | null } | null } | null; nodes: SlashRaw[] } | null;
+  }>(
     NETWORK,
     SUPPLIER_SLASHES,
-    { filter: { supplier: revShareSupplierFilter(addresses) }, first: pageSize, offset: (page - 1) * pageSize },
+    {
+      filter: { supplier: revShareSupplierFilter(addresses), blockId: { greaterThanOrEqualTo: fromBlock } },
+      first: pageSize,
+      offset: (page - 1) * pageSize,
+    },
     { revalidate: 300 },
   );
   const d = data.eventSupplierSlasheds;
   return {
     totalCount: d?.totalCount ?? 0,
+    penaltyUpokt: d?.aggregates?.sum?.proofMissingPenalty ?? '0',
+    indexed: true,
     rows: (d?.nodes ?? []).map((n) => ({
       supplier: n.supplierId,
       block: num(n.blockId),

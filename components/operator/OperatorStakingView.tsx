@@ -73,8 +73,8 @@ function OperatorBody() {
     prefetch(`/api/operator/claim-proof?addresses=${addrParam}&range=${range}`);
     prefetch(`/api/operator/rewards-by-service?addresses=${addrParam}&range=${range}`);
     prefetch(`/api/operator/overserviced?addresses=${addrParam}&range=${range}`);
-    // Page-based tabs (range-independent) — warmed once per address set.
-    prefetch(`/api/operator/slashing?addresses=${addrParam}&page=1`);
+    prefetch(`/api/operator/slashing?addresses=${addrParam}&range=${range}&page=1`);
+    // Page-based tab (range-independent) — warmed once per address set.
     prefetch(`/api/operator/suppliers?addresses=${addrParam}&page=1`);
   }, [addrParam, range]);
 
