@@ -117,9 +117,9 @@ export function SlashingTab() {
                       </a>
                     </td>
                     <td className="border-b px-1.5 py-3 font-mono sm:px-3">{formatNumber(r.block)}</td>
-                    <td className="border-b px-1.5 py-3 text-right tabular-nums text-coral sm:px-3">{formatPokt(r.penaltyUpokt)}</td>
-                    <td className="hidden border-b px-1.5 py-3 text-right tabular-nums sm:table-cell sm:px-3">{formatPokt(r.prevStakeUpokt)}</td>
-                    <td className="hidden border-b px-1.5 py-3 text-right tabular-nums sm:table-cell sm:px-3">{formatPokt(r.afterStakeUpokt)}</td>
+                    <td className="border-b px-1.5 py-3 text-right tabular-nums text-coral sm:px-3">{formatPokt(r.penaltyUpokt, 6)} POKT</td>
+                    <td className="hidden border-b px-1.5 py-3 text-right tabular-nums sm:table-cell sm:px-3">{formatPokt(r.prevStakeUpokt)} POKT</td>
+                    <td className="hidden border-b px-1.5 py-3 text-right tabular-nums sm:table-cell sm:px-3">{formatPokt(r.afterStakeUpokt)} POKT</td>
                     <td className="hidden border-b px-1.5 py-3 sm:table-cell sm:px-3">{r.proofStatus ?? '—'}</td>
                     <td className="border-b px-1.5 py-3 font-medium text-blue-soft sm:px-3">{r.serviceId ?? '—'}</td>
                   </tr>
