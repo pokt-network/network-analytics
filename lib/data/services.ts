@@ -3,7 +3,7 @@ import { toDate } from '@/lib/time';
 import { UPOKT_PER_POKT } from '@/lib/config';
 import { NETWORK, type RangeKey } from '@/lib/app-config';
 import { rangeWindow, rangeTTL } from '@/lib/timeranges';
-import { LAST_PROCESSED_HEIGHT, SERVICES_LIST, RELAYS_BY_SERVICE_PER_POINT } from '@/lib/queries/analytics';
+import { SERVICES_FIRST_PAGE, SERVICES_LIST, RELAYS_BY_SERVICE_PER_POINT } from '@/lib/queries/analytics';
 import { getServicesPerformance } from './traffic';
 import { num, parseScalar } from './_util';
 
@@ -34,40 +34,30 @@ export async function getServicesList(): Promise<{ services: ServiceListItem[]; 
   return walk.short ? { services: out, note: `Showing ${out.length} services; the list could not be read whole (${walk.short}).` } : { services: out };
 }
 
-/** One walk of the services list; `short` says why it read less than the count. A list that fits one page (the case
- *  today: 269 services) is one request; a longer one is read again from its first page with every page at the latest
- *  processed height, so the pages are one snapshot. */
+type ServicesPage = { totalCount: number; pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: ServiceListItem[] };
+
+/** One walk of the services list; `short` says why it read less than the count. The first page comes with the last
+ *  processed height in the same request, and every later page is read at that height. A list that fits one page (the
+ *  case today: 269 services) is that one request. */
 async function walkServices(): Promise<{ nodes: ServiceListItem[]; short: string | null }> {
   // No per-page fetch cache: the route's unstable_cache keeps the whole walk, so the list is one snapshot.
-  const first = await servicesPage(null, null);
-  if (!first.services?.pageInfo?.hasNextPage) {
-    const nodes = first.services?.nodes ?? [];
-    const totalCount = first.services?.totalCount ?? 0;
-    return { nodes, short: nodes.length === totalCount ? null : `read ${nodes.length} rows, the list counts ${totalCount}` };
-  }
-  const meta = await gqlFetch<{ _metadata: { lastProcessedHeight: number | string | null } | null }>(NETWORK, LAST_PROCESSED_HEIGHT);
-  const blockHeight = meta._metadata?.lastProcessedHeight;
-  if (blockHeight == null) return { nodes: first.services.nodes ?? [], short: 'the indexer reports no processed height' };
-  const nodes: ServiceListItem[] = [];
-  let after: string | null = null;
-  let totalCount = 0;
-  for (let page = 0; ; page++) {
+  const first = await gqlFetch<{ _metadata: { lastProcessedHeight: number | string | null } | null; services: ServicesPage }>(NETWORK, SERVICES_FIRST_PAGE);
+  const blockHeight = first._metadata?.lastProcessedHeight;
+  const nodes: ServiceListItem[] = [...(first.services?.nodes ?? [])];
+  let totalCount = first.services?.totalCount ?? 0;
+  let after = first.services?.pageInfo?.endCursor ?? null;
+  let more = first.services?.pageInfo?.hasNextPage ?? false;
+  if (more && blockHeight == null) return { nodes, short: 'the indexer reports no processed height to read the next pages at' };
+  for (let page = 1; more; page++) {
     if (page === SERVICES_MAX_PAGES) return { nodes, short: `stopped after ${page} pages, ${nodes.length} rows of ${totalCount}` };
-    const data = await servicesPage(after, String(blockHeight));
+    if (!after) return { nodes, short: `more pages but no cursor after ${nodes.length} rows of ${totalCount}` };
+    const data = await gqlFetch<{ services: ServicesPage }>(NETWORK, SERVICES_LIST, { after, blockHeight: String(blockHeight) });
     totalCount = data.services?.totalCount ?? 0;
     nodes.push(...(data.services?.nodes ?? []));
     after = data.services?.pageInfo?.endCursor ?? null;
-    if (!data.services?.pageInfo?.hasNextPage) break;
-    if (!after) return { nodes, short: `more pages but no cursor after ${nodes.length} rows of ${totalCount}` };
+    more = data.services?.pageInfo?.hasNextPage ?? false;
   }
   return { nodes, short: nodes.length === totalCount ? null : `read ${nodes.length} rows, the list counts ${totalCount}` };
-}
-
-async function servicesPage(
-  after: string | null,
-  blockHeight: string | null,
-): Promise<{ services: { totalCount: number; pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: ServiceListItem[] } }> {
-  return gqlFetch(NETWORK, SERVICES_LIST, { after, ...(blockHeight ? { blockHeight } : {}) });
 }
 
 interface RelayPointRaw {

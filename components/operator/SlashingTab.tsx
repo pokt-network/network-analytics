@@ -99,7 +99,14 @@ export function SlashingTab() {
         }
       />
       {d.error ? (
-        <EmptyState>{d.error}</EmptyState>
+        <>
+          <EmptyState>{d.error}</EmptyState>
+          {/* a failed page keeps the way back */}
+          <div className="mt-3.5 flex justify-end gap-1.5 text-[13px] text-text-secondary">
+            <button type="button" disabled={page <= 1} onClick={d.prev} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Prev</button>
+            <button type="button" disabled onClick={d.next} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>
+          </div>
+        </>
       ) : !d.data ? (
         <ChartSkeleton height={200} />
       ) : !d.data.indexed ? (
@@ -158,6 +165,10 @@ export function SlashingTab() {
         </>
       )}
       {coverageNote && !noRows && d.data?.indexed && <p className="mt-3 text-[12px] text-text-tertiary">{coverageNote}</p>}
+      <p className="mt-3 text-[12px] italic text-text-tertiary">
+        Lists the suppliers that are Staked and share revenue with these addresses now: slashes of suppliers that have since
+        unstaked or stopped sharing revenue with them are not listed yet.
+      </p>
       {exportNote && <p className="mt-3 text-[12px] text-text-secondary">{exportNote}</p>}
     </Card>
   );

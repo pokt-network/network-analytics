@@ -48,15 +48,16 @@ export function RewardIssuancesTab() {
       );
       const rows = all.slice(0, EXPORT_CAP);
       const capped = all.length > EXPORT_CAP || !complete;
-      // Owner As Of: 'settlement' = the owner the settlement recorded; 'current' = the supplier's owner now, for the
-      // few old settlements that recorded none
-      const headers = ['Block', 'Service', 'Operator', 'Owner', 'Owner As Of', 'Relays', 'Settled (POKT)', 'Minted (POKT)', 'Mint Ratio'];
+      // Owner = the supplier's owner now (Owner As Of says so: 'current'; 'settlement' or 'unknown' where it could not be
+      // read); Owner At Settlement = the owner the settlement recorded (empty for a few old rows)
+      const headers = ['Block', 'Service', 'Operator', 'Owner', 'Owner As Of', 'Owner At Settlement', 'Relays', 'Settled (POKT)', 'Minted (POKT)', 'Mint Ratio'];
       const body = rows.map((r) => [
         r.block,
         r.serviceId,
         r.operator,
         r.owner,
         r.ownerAsOf,
+        r.settlementOwner,
         r.relays,
         r.settledUpokt / UPOKT_PER_POKT,
         r.mintedUpokt / UPOKT_PER_POKT,

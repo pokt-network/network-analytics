@@ -46,13 +46,37 @@ function keysetFilter(after: string | null): Record<string, unknown> | null {
   return { or: [{ stakeUpokt: { lessThan: stake } }, { and: [{ stakeUpokt: { equalTo: stake } }, { supplierId: { greaterThan: id } }] }] };
 }
 
+/** A non-negative decimal string (an indexer BigFloat: `60010000000`, `1.5`, `6.001e10`) as [integer part, fraction
+ *  digits], exactly, with no float on the way. */
+function decimalParts(v: string | number): [bigint, string] {
+  const m = String(v).trim().toLowerCase().match(/^(\d*)(?:\.(\d*))?(?:e([+-]?\d+))?$/);
+  if (!m) throw new Error(`supplier list: stake ${v} is not a decimal`);
+  const exp = Number(m[3] ?? 0);
+  const digits = `${m[1] ?? ''}${m[2] ?? ''}`;
+  // the point sits after the integer digits, moved by the exponent
+  const point = (m[1] ?? '').length + exp;
+  const padded = point > digits.length ? digits.padEnd(point, '0') : point < 0 ? '0'.repeat(-point) + digits : digits;
+  const at = Math.max(point, 0);
+  return [BigInt(padded.slice(0, at) || '0'), padded.slice(at).replace(/0+$/, '')];
+}
+
+/** Compares two decimal strings exactly: negative when a < b. */
+function compareDecimal(a: string | number, b: string | number): number {
+  const [ai, af] = decimalParts(a);
+  const [bi, bf] = decimalParts(b);
+  if (ai !== bi) return ai < bi ? -1 : 1;
+  const n = Math.max(af.length, bf.length);
+  const [x, y] = [af.padEnd(n, '0'), bf.padEnd(n, '0')];
+  return x === y ? 0 : x < y ? -1 : 1;
+}
+
 /** A page from the rows asked for (pageSize + 1: the extra one tells whether another page follows). getSupplierFleetList
  *  takes no orderBy: the keyset relies on its own ORDER BY (stake desc, then id), so a row out of that order fails the
  *  page instead of paging wrong. */
 function toPage(all: FleetRowRaw[], pageSize: number, totalCount: number): SupplierListPage {
   for (let i = 1; i < all.length; i++) {
-    const [a, b] = [BigInt(String(all[i - 1].stakeUpokt)), BigInt(String(all[i].stakeUpokt))];
-    if (a < b || (a === b && all[i - 1].supplierId >= all[i].supplierId)) {
+    const c = compareDecimal(all[i - 1].stakeUpokt, all[i].stakeUpokt);
+    if (c < 0 || (c === 0 && all[i - 1].supplierId >= all[i].supplierId)) {
       throw new Error('supplier list: rows out of the (stake desc, id) order the paging relies on');
     }
   }

@@ -168,11 +168,13 @@ export interface Issuance {
   serviceId: string;
   /** Operator (node) address — the supplier that settled this claim. */
   operator: string;
-  /** Owner of that supplier as the settlement recorded it, or its current owner where the settlement recorded none. */
+  /** Owner of that supplier now (what groups a fleet), or the one the settlement recorded where the current one could
+   *  not be read; '—' when neither is known. */
   owner: string;
-  /** 'settlement': the owner the settlement recorded; 'current': the supplier's owner now (the settlement has none);
-   *  'unknown': neither could be read (owner is '—'). */
+  /** Which owner `owner` is: 'current' (now), 'settlement' (recorded at settlement) or 'unknown'. */
   ownerAsOf: 'settlement' | 'current' | 'unknown';
+  /** The owner the settlement recorded ('' where it recorded none: 211 old rows on mainnet). */
+  settlementOwner: string;
   relays: number;
   settledUpokt: number;
   mintedUpokt: number;
@@ -208,7 +210,11 @@ export async function getOwnerIssuances(addresses: string[], pageSize = 25, afte
     : unwrapRange<unknown>(parseScalar((await gqlFetch<{ getClaimsJson: unknown }>(NETWORK, OWNER_CLAIMS_RANGE, { owners: addresses }, { revalidate: 30 })).getClaimsJson), false).range;
   const page = all.slice(0, pageSize);
   const last = page[page.length - 1];
-  const current = await currentOwners([...new Set(page.filter((n) => !n.supplierOwnerId).map((n) => n.supplierId))]);
+  // every supplier listed is owned now by one of the owners: with one owner that is the current owner, no lookup
+  const current =
+    addresses.length === 1
+      ? new Map(page.map((n) => [n.supplierId, addresses[0]]))
+      : await currentOwners([...new Set(page.map((n) => n.supplierId))]);
   return {
     range,
     endCursor: last ? `${last.height}:${last.eventIdx}` : null,
@@ -220,8 +226,9 @@ export async function getOwnerIssuances(addresses: string[], pageSize = 25, afte
         block: num(n.height),
         serviceId: n.serviceId,
         operator: n.supplierId,
-        owner: n.supplierOwnerId || current.get(n.supplierId) || '—',
-        ownerAsOf: n.supplierOwnerId ? 'settlement' : current.get(n.supplierId) ? 'current' : 'unknown',
+        owner: current.get(n.supplierId) || n.supplierOwnerId || '—',
+        ownerAsOf: current.get(n.supplierId) ? 'current' : n.supplierOwnerId ? 'settlement' : 'unknown',
+        settlementOwner: n.supplierOwnerId ?? '',
         relays: num(n.relays),
         settledUpokt: settled,
         mintedUpokt: minted,
@@ -231,8 +238,8 @@ export async function getOwnerIssuances(addresses: string[], pageSize = 25, afte
   };
 }
 
-/** The current owner of each supplier (a flat lookup by id), for the settlements that recorded none (211 rows on
- *  mainnet, all at heights 461433-689253). A supplier it cannot find, or a failed lookup, leaves only that cell unknown. */
+/** The current owner of each supplier (a flat lookup by id). A supplier it cannot find, or a failed lookup, leaves only
+ *  that cell on the settlement's owner (or unknown). */
 async function currentOwners(ids: string[]): Promise<Map<string, string>> {
   if (ids.length === 0) return new Map();
   try {

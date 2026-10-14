@@ -45,7 +45,14 @@ export function SuppliersTable({
     <Card>
       <CardHeader title="Suppliers" icon={<IconUsers size={18} />} right={right} />
       {error ? (
-        <EmptyState>{error}</EmptyState>
+        <>
+          <EmptyState>{error}</EmptyState>
+          {/* a failed page keeps the way back */}
+          <div className="mt-3.5 flex justify-end gap-1.5 text-[13px] text-text-secondary">
+            <button type="button" disabled={page <= 1} onClick={onPrev} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Prev</button>
+            <button type="button" disabled onClick={onNext} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>
+          </div>
+        </>
       ) : !data ? (
         <ChartSkeleton height={200} />
       ) : totalCount === 0 ? (

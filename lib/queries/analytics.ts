@@ -79,20 +79,30 @@ export const TOKENOMICS_PARAM = /* GraphQL */ `
   }
 `;
 
-// The last block the indexer processed: the height a walk over several list pages reads every page at.
-export const LAST_PROCESSED_HEIGHT = /* GraphQL */ `
-  query lastProcessedHeight {
+// Services list (id + label) for the Services picker. The indexer returns up to 1000 rows per page; a longer
+// list is walked with `after` = the previous page's endCursor. The first page comes with the last processed height
+// (SERVICES_FIRST_PAGE), and every later page is read at that $blockHeight, so the walk is one snapshot.
+export const SERVICES_FIRST_PAGE = /* GraphQL */ `
+  query servicesFirstPage {
     _metadata {
       lastProcessedHeight
+    }
+    services(first: 1000, orderBy: ID_ASC) {
+      totalCount
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        id
+        name
+      }
     }
   }
 `;
 
-// Services list (id + label) for the Services picker. The indexer returns up to 1000 rows per page; a longer
-// list is walked with `after` = the previous page's endCursor, every page at the same $blockHeight (one snapshot; left
-// out for a list that fits one page).
 export const SERVICES_LIST = /* GraphQL */ `
-  query servicesList($after: Cursor, $blockHeight: String) {
+  query servicesList($after: Cursor, $blockHeight: String!) {
     services(first: 1000, orderBy: ID_ASC, after: $after, blockHeight: $blockHeight) {
       totalCount
       pageInfo {

@@ -13,7 +13,7 @@ import {
   SUPPLIER_SLASH_TOTALS,
 } from '@/lib/queries/analytics';
 import { num, parseScalar } from './_util';
-import { unwrapRange, notCovered, fillCoverage, type CoverageRange } from './coverage';
+import { unwrapRange, notCovered, uncoveredSpans, fillCoverage, type CoverageRange } from './coverage';
 import { getRewardsWindow } from './owner';
 import { fetchFleetSummary, fetchOperatorSuppliers, type SupplierListPage } from './suppliers-list';
 
@@ -201,7 +201,9 @@ export async function getOperatorOverserviced(addresses: string[], range: RangeK
 // The operators' suppliers the tab lists: 'now' (the Staked suppliers whose live service configs share revenue with
 // them: the old rev-share relation filter's set). 'ever' (every supplier that ever shared revenue, so also those slashed
 // and then unstaked) costs ~9 s a call for 7 addresses against ~0.6 s (mainnet, 2026-10-14), and getSupplierPenaltiesJson
-// has no scope to total it: pocketdex function needed.
+// has no scope to total it: pocketdex function needed. The totals (getSupplierPenaltiesJson, which takes no
+// operatorScope yet) and the rows resolve `operators` to the same set under 'now' (_operator_suppliers on both sides);
+// pass this scope to getSupplierPenaltiesJson too once it accepts one, before switching to 'ever'.
 const SLASH_OPERATOR_SCOPE = 'now';
 
 interface SlashRaw {
@@ -291,8 +293,10 @@ async function countSlashes(addresses: string[], from: string, to: string): Prom
  *  is read in the same request), and, rarely, a late start, a gap or a lag longer than an hour. The caller caches it. */
 export async function getOperatorSlashTotals(addresses: string[], range: RangeKey): Promise<SlashTotals> {
   const w = rangeWindow(range);
-  const endMs = Date.parse(w.endISO);
-  const tailStart = new Date(Math.max(Date.parse(w.startISO), endMs - HOUR_MS)).toISOString();
+  const ms = (iso: string | null | undefined) => toDate(iso)?.getTime() ?? NaN;
+  const endMs = ms(w.endISO);
+  const tailFrom = Math.max(ms(w.startISO), endMs - HOUR_MS);
+  const tailStart = new Date(tailFrom).toISOString();
   const data = await gqlFetch<{ getSupplierPenaltiesJson: unknown; tail: Array<Pick<SlashRaw, 'blockTime' | 'penaltyUpokt'>> | null }>(
     NETWORK,
     SUPPLIER_SLASH_TOTALS,
@@ -300,8 +304,9 @@ export async function getOperatorSlashTotals(addresses: string[], range: RangeKe
     { cache: 'no-store' },
   );
   const t = unwrapRange<SlashTotalRaw[]>(parseScalar(data.getSupplierPenaltiesJson), false);
-  // nothing covered: the whole window from the indexed blocks
-  if (!t.range || notCovered(t.range)) {
+  // nothing covered: the whole window from the indexed blocks (an indexer without the range contract sends no range:
+  // its totals stand as they are)
+  if (t.range && notCovered(t.range)) {
     const all = await countSlashes(addresses, w.startISO, w.endISO);
     return { totalCount: all.count, penaltyUpokt: all.sum.toString(), capped: all.capped };
   }
@@ -310,20 +315,19 @@ export async function getOperatorSlashTotals(addresses: string[], range: RangeKe
   let count = slashed.reduce((s, r) => s + num(r.events), 0);
   let sum = slashed.reduce((s, r) => s + BigInt(r.slashed_upokt ?? '0'), BigInt(0));
   let capped = false;
-  const coveredTo = Date.parse(t.range.covered_to ?? w.endISO);
-  // the uncovered stretches: a late start, the gaps, the end past covered_to
-  const uncovered: Array<[number, number]> = [];
-  const coveredFrom = Date.parse(t.range.covered_from ?? w.startISO);
-  if (coveredFrom > Date.parse(w.startISO)) uncovered.push([Date.parse(w.startISO), coveredFrom]);
-  for (const g of t.range.gaps ?? []) uncovered.push([Date.parse(g.from ?? w.startISO), Date.parse(g.to ?? w.endISO)]);
-  if (coveredTo < endMs) uncovered.push([coveredTo, endMs]);
-  const tailFrom = Date.parse(tailStart);
-  const tail = data.tail ?? [];
-  for (const [a, b] of uncovered) {
-    if (a >= b) continue;
+  // the last hour's events with their time; one without a time cannot be placed in or out of a stretch: dropped, and
+  // the totals then say "at least"
+  const tail = (data.tail ?? []).map((r) => ({ ...r, t: ms(r.blockTime) }));
+  const placed = tail.filter((r) => Number.isFinite(r.t));
+  if (placed.length < tail.length) {
+    console.warn(`slashing totals: ${tail.length - placed.length} tail events without a block time, left out`);
+    capped = true;
+  }
+  // the uncovered stretches, each once (coverage.ts): a late start, the gaps, the end past covered_to
+  for (const [a, b] of t.range ? uncoveredSpans(t.range) : []) {
     if (a >= tailFrom && tail.length < LIFECYCLE_ROW_LIMIT) {
       // inside the last hour, already read
-      const rows = tail.filter((r) => Date.parse(r.blockTime ?? '') >= a && Date.parse(r.blockTime ?? '') < b);
+      const rows = placed.filter((r) => r.t >= a && r.t < b);
       count += rows.length;
       sum += slashSum(rows);
     } else {

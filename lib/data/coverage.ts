@@ -63,6 +63,20 @@ function parse(range: CoverageRange) {
   return { ...t, from, to, gaps };
 }
 
+/**
+ * The parts of the requested window the answer does not cover, as half-open [from, to) in milliseconds, each once: a late
+ * start, the gaps (clipped to the covered span and merged, as parse() does), and the end past covered_to. Empty when the
+ * range is fully covered; for a range with nothing covered use notCovered() first.
+ */
+export function uncoveredSpans(range: CoverageRange): Array<[number, number]> {
+  const p = parse(range);
+  const spans: Array<[number, number]> = [];
+  if (Number.isFinite(p.requestedFrom) && p.from > p.requestedFrom) spans.push([p.requestedFrom, p.from]);
+  spans.push(...p.gaps);
+  if (Number.isFinite(p.requestedTo) && p.to < p.requestedTo) spans.push([p.to, p.requestedTo]);
+  return spans.filter(([a, b]) => a < b);
+}
+
 /** An end short of the window by less than this is the indexer's normal lag behind now, not missing data. */
 const COVERAGE_END_SLACK_MS = 3_600_000;
 const HOUR_PRECISION_MAX_MS = 48 * 3_600_000;
