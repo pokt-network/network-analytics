@@ -40,7 +40,7 @@ type ServicesPage = { totalCount: number; pageInfo: { hasNextPage: boolean; endC
  *  processed height in the same request, and every later page is read at that height. A list that fits one page (the
  *  case today: 269 services) is that one request. */
 async function walkServices(): Promise<{ nodes: ServiceListItem[]; short: string | null }> {
-  // No per-page fetch cache: the route's unstable_cache keeps the whole walk, so the list is one snapshot.
+  // No per-page fetch cache: the route's unstable_cache keeps the whole walk.
   const first = await gqlFetch<{ _metadata: { lastProcessedHeight: number | string | null } | null; services: ServicesPage }>(NETWORK, SERVICES_FIRST_PAGE);
   const blockHeight = first._metadata?.lastProcessedHeight;
   const nodes: ServiceListItem[] = [...(first.services?.nodes ?? [])];

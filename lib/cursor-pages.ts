@@ -10,6 +10,7 @@ interface CursorPage {
   hasNextPage?: boolean;
   endCursor?: string | null;
   rows?: unknown[];
+  totalCount?: number;
 }
 
 /**
@@ -17,15 +18,26 @@ interface CursorPage {
  * addresses, another filter) goes back to page 1. Next takes the cursor of the page actually on screen for the url being
  * shown: while a page loads the previous one's data stays on screen, so Next is off until the page's own data arrives.
  * A page past the first with no cursor is an error, never served as page 1.
+ *
+ * `rowKey` (for a keyset on a value that can change, such as a supplier's stake) makes it check the walk: `repeats` are
+ * rows of this page already shown on an earlier one, and `missed`, on the last page, how many of the list's totalCount
+ * the pages from the first one never showed. A row whose key value crosses the page boundary between two reads is
+ * shown twice or skipped; the other rows do not shift.
  */
-export function useCursorPages<T extends CursorPage>(baseUrl: string, resetKey: string, opts: { prefetchSiblings?: boolean } = {}) {
+export function useCursorPages<T extends CursorPage>(
+  baseUrl: string,
+  resetKey: string,
+  opts: { prefetchSiblings?: boolean; rowKey?: (row: unknown) => string } = {},
+) {
   const [page, setPage] = useState(1);
   const [cursors, setCursors] = useState<string[]>([]); // cursors[i]: the endCursor page i + 2 starts after
+  const [shown, setShown] = useState<string[][]>([]); // shown[i]: the row keys page i + 1 showed
   const [prevKey, setPrevKey] = useState(resetKey);
   if (prevKey !== resetKey) {
     setPrevKey(resetKey);
     setPage(1);
     setCursors([]);
+    setShown([]);
   }
   const cursor = page > 1 ? cursors[page - 2] : null;
   const missing = page > 1 && !cursor;
@@ -40,7 +52,22 @@ export function useCursorPages<T extends CursorPage>(baseUrl: string, resetKey: 
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (emptyPast) setPage((p) => Math.max(1, p - 1));
   }, [emptyPast]);
+  const { rowKey } = opts;
+  const keys = current && rowKey ? (d.data?.rows ?? []).map(rowKey) : null;
+  const keysJoined = keys?.join('\n') ?? null;
+  useEffect(() => {
+    if (keysJoined === null) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setShown((s) => {
+      const next = s.slice(0, page);
+      next[page - 1] = keysJoined ? keysJoined.split('\n') : [];
+      return next;
+    });
+  }, [keysJoined, page]);
+  const { repeats, missed } = keys ? walkCheck(shown, page, keys, !!d.data?.hasNextPage, d.data?.totalCount) : { repeats: 0, missed: 0 };
   return {
+    repeats,
+    missed,
     data: d.data,
     loading: d.loading,
     error: missing ? `No cursor for page ${page}` : d.error,
@@ -56,9 +83,23 @@ export function useCursorPages<T extends CursorPage>(baseUrl: string, resetKey: 
 }
 
 /**
+ * The walk check of useCursorPages: `shown[i]` the row keys page i + 1 showed (this page's own may not be recorded yet),
+ * `keys` this page's. repeats = this page's keys already on an earlier page; missed = on the last page, with every
+ * earlier page recorded, how many of `total` no page showed.
+ */
+export function walkCheck(shown: string[][], page: number, keys: string[], hasNextPage: boolean, total?: number): { repeats: number; missed: number } {
+  const earlier = new Set(shown.slice(0, page - 1).flat());
+  const repeats = keys.filter((k) => earlier.has(k)).length;
+  const walked = shown.slice(0, page - 1).length === page - 1 && shown.slice(0, page - 1).every(Boolean);
+  const distinct = new Set([...earlier, ...keys]).size;
+  const missed = !hasNextPage && walked && typeof total === 'number' ? Math.max(0, total - distinct) : 0;
+  return { repeats, missed };
+}
+
+/**
  * Every row of a keyset route from its first page, `chunk` rows a call, stepping by the rows and cursor each page
- * returns, at most `cap` rows and `maxCalls` calls. `complete` is false when it stopped at a cap with rows left. A failed call, or a page that says
- * more follow without a cursor, throws.
+ * returns, at most `cap` rows and `maxCalls` calls. `complete` is false when it stopped at a cap with rows left. A
+ * failed call, or a page that says more follow without a cursor, throws.
  */
 export async function walkPages<R>(
   pageUrl: (after: string | null, size: number) => string,

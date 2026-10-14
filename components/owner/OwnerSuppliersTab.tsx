@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useStakingTool } from '@/components/staking/StakingToolContext';
 import { useCursorPages } from '@/lib/cursor-pages';
-import { type SupplierListPage, type StakeFilter, STAKE_FILTERS } from '@/lib/data/suppliers-list';
+import { type SupplierListPage, type SupplierRow, type StakeFilter, STAKE_FILTERS } from '@/lib/data/suppliers-list';
 import { SuppliersTable } from '@/components/staking/SuppliersTable';
 
 // Owner's fleet of suppliers, with a stake-status filter (All / Staked / Unstaking / Unstaked /
@@ -16,6 +16,7 @@ export function OwnerSuppliersTab() {
   const d = useCursorPages<SupplierListPage>(
     addresses.length ? `/api/owner/suppliers?addresses=${addrParam}&filter=${filter}` : '',
     `${addrParam}|${filter}`,
+    { rowKey: (r) => (r as SupplierRow).operator },
   );
 
   const filterSelect = (
@@ -41,6 +42,8 @@ export function OwnerSuppliersTab() {
       onPrev={d.prev}
       onNext={d.next}
       error={d.error}
+      repeats={d.repeats}
+      missed={d.data?.totalCapped ? 0 : d.missed}
       right={filterSelect}
       emptyLabel={filter === 'all' ? 'No suppliers found for these owners.' : 'No suppliers match this filter.'}
     />

@@ -81,7 +81,9 @@ export const TOKENOMICS_PARAM = /* GraphQL */ `
 
 // Services list (id + label) for the Services picker. The indexer returns up to 1000 rows per page; a longer
 // list is walked with `after` = the previous page's endCursor. The first page comes with the last processed height
-// (SERVICES_FIRST_PAGE), and every later page is read at that $blockHeight, so the walk is one snapshot.
+// (SERVICES_FIRST_PAGE), and every later page is read at that $blockHeight. The first page's rows and the height come
+// in one request, assumed (not verified) to be the same height; the walk's count check catches one that does not add
+// up.
 export const SERVICES_FIRST_PAGE = /* GraphQL */ `
   query servicesFirstPage {
     _metadata {
@@ -199,7 +201,8 @@ export const SUPPLIER_FLEET_SUMMARY = /* GraphQL */ `
 `;
 
 // One page of the owners' suppliers now (any status; $stakeStatuses keeps some), largest stake first, then by id, and
-// their count, in one request (one snapshot), all from the fleet function. $after holds the keyset (the rows below the
+// their count, in one request (whether PostGraphile reads both fields in one snapshot is not verified), all from the
+// fleet function. $after holds the keyset (the rows below the
 // previous page's last stake and id) and, for "below min stake", the stake ceiling ($ceiling). The count is the fleet's
 // own supplierCount; with a ceiling ($belowMin) the fleet row cannot apply it, so the ids under it are listed instead
 // (up to 1001: more is reported as capped). serviceCount is the number of services the supplier has a live config for.
@@ -240,10 +243,11 @@ export const SUPPLIER_OWNERS = /* GraphQL */ `
   }
 `;
 
-// One page of the operators' suppliers now, largest stake first (then by id), and their count, in one request (one
-// snapshot). The next page passes $after = the rows below the previous page's last (stake, id), a keyset: a stake
-// change between two pages cannot shift rows as OFFSET does. serviceCount is the number of services the supplier has a
-// live config for.
+// One page of the operators' suppliers now, largest stake first (then by id), and their count, in one request. The
+// next page passes $after = the rows below the previous page's last (stake, id), a keyset: the other rows do not shift
+// as they do with OFFSET, but a supplier whose stake crosses the page boundary between two reads (a slash, a top-up) can
+// be shown twice or missed; the tabs flag both (useCursorPages). serviceCount is the number of services the supplier has
+// a live config for.
 export const OPERATOR_SUPPLIERS = /* GraphQL */ `
   query operatorSuppliers($operators: [String], $first: Int, $after: GetSupplierFleetRecordFilter) {
     rows: getSupplierFleetList(operators: $operators, first: $first, filter: $after) {

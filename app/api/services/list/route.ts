@@ -2,7 +2,9 @@ import { unstable_cache } from 'next/cache';
 import { getServicesList } from '@/lib/data/services';
 import { diagJson, stamped } from '@/lib/diagnostics';
 
-export const revalidate = 43200; // 12h — the services list is very stable
+// Dynamic: the 12 h cache is the unstable_cache entry below, the only one, so a short read (kept out of it) is not
+// stored by the route cache either. As static ISR the route stored whatever the handler returned for 12 h.
+export const dynamic = 'force-dynamic';
 
 type ServicesList = Awaited<ReturnType<typeof getServicesList>>;
 

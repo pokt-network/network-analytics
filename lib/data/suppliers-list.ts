@@ -46,18 +46,13 @@ function keysetFilter(after: string | null): Record<string, unknown> | null {
   return { or: [{ stakeUpokt: { lessThan: stake } }, { and: [{ stakeUpokt: { equalTo: stake } }, { supplierId: { greaterThan: id } }] }] };
 }
 
-/** A non-negative decimal string (an indexer BigFloat: `60010000000`, `1.5`, `6.001e10`) as [integer part, fraction
- *  digits], exactly, with no float on the way. */
+/** A non-negative decimal string (an indexer BigFloat: `60010000000`, `1.5`) as [integer part, fraction digits],
+ *  exactly, with no float on the way. PostgreSQL prints numeric without an exponent and PostGraphile passes BigFloat on
+ *  as that text, so an exponent is not expected: it fails here, as the cursor routes refuse it. */
 function decimalParts(v: string | number): [bigint, string] {
-  const m = String(v).trim().toLowerCase().match(/^(\d*)(?:\.(\d*))?(?:e([+-]?\d+))?$/);
-  if (!m) throw new Error(`supplier list: stake ${v} is not a decimal`);
-  const exp = Number(m[3] ?? 0);
-  const digits = `${m[1] ?? ''}${m[2] ?? ''}`;
-  // the point sits after the integer digits, moved by the exponent
-  const point = (m[1] ?? '').length + exp;
-  const padded = point > digits.length ? digits.padEnd(point, '0') : point < 0 ? '0'.repeat(-point) + digits : digits;
-  const at = Math.max(point, 0);
-  return [BigInt(padded.slice(0, at) || '0'), padded.slice(at).replace(/0+$/, '')];
+  const m = String(v).trim().match(/^(\d+)(?:\.(\d*))?$/);
+  if (!m) throw new Error(`supplier list: stake ${v} is not a plain decimal`);
+  return [BigInt(m[1]), (m[2] ?? '').replace(/0+$/, '')];
 }
 
 /** Compares two decimal strings exactly: negative when a < b. */

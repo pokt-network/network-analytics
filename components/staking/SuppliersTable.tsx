@@ -24,6 +24,8 @@ export function SuppliersTable({
   onPrev,
   onNext,
   error,
+  repeats = 0,
+  missed = 0,
   pageSize = 25,
   right,
   emptyLabel = 'No suppliers found.',
@@ -34,6 +36,10 @@ export function SuppliersTable({
   onPrev: () => void;
   onNext: () => void;
   error?: string | null;
+  /** Rows of this page already shown on an earlier one, and (on the last page) rows the pages never showed: suppliers
+   *  whose stake crossed a page boundary while paging. */
+  repeats?: number;
+  missed?: number;
   pageSize?: number;
   right?: ReactNode;
   emptyLabel?: string;
@@ -101,6 +107,14 @@ export function SuppliersTable({
               <button type="button" disabled={!canNext} onClick={onNext} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>
             </div>
           </div>
+          {(repeats > 0 || missed > 0) && (
+            <p className="mt-3 text-[12px] text-text-tertiary">
+              {repeats > 0 && `${formatNumber(repeats)} of these suppliers were already on an earlier page. `}
+              {missed > 0 && `${formatNumber(missed)} suppliers were not on any page. `}
+              Their stake changed while paging (a slash or a top-up moves a supplier across pages); go back to page 1 for a
+              fresh read.
+            </p>
+          )}
         </>
       )}
     </Card>
