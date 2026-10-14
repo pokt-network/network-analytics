@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useStakingTool } from '@/components/staking/StakingToolContext';
-import { useTabData } from '@/lib/use-tab-data';
+import { useCursorPages } from '@/lib/cursor-pages';
 import { type SupplierListPage, type StakeFilter, STAKE_FILTERS } from '@/lib/data/suppliers-list';
 import { SuppliersTable } from '@/components/staking/SuppliersTable';
 
@@ -10,27 +10,13 @@ import { SuppliersTable } from '@/components/staking/SuppliersTable';
 // Below Min Stake). "Below Min Stake" flags staked nodes at or under the governance minimum.
 export function OwnerSuppliersTab() {
   const { addresses } = useStakingTool();
-  const [page, setPage] = useState(1);
-  const [cursors, setCursors] = useState<string[]>([]); // cursors[i]: the endCursor page i + 2 starts after
   const [filter, setFilter] = useState<StakeFilter>('all');
 
   const addrParam = addresses.join(',');
-  const resetKey = `${addrParam}|${filter}`;
-  const [prevKey, setPrevKey] = useState(resetKey);
-  if (prevKey !== resetKey) {
-    setPrevKey(resetKey);
-    setPage(1);
-    setCursors([]);
-  }
-
-  const pageAfter = page > 1 ? `&after=${encodeURIComponent(cursors[page - 2] ?? '')}` : '';
-  const d = useTabData<SupplierListPage>(
-    addresses.length ? `/api/owner/suppliers?addresses=${addrParam}&filter=${filter}${pageAfter}` : '',
+  const d = useCursorPages<SupplierListPage>(
+    addresses.length ? `/api/owner/suppliers?addresses=${addrParam}&filter=${filter}` : '',
+    `${addrParam}|${filter}`,
   );
-  const onPageChange = (p: number) => {
-    if (p > page) setCursors((c) => [...c.slice(0, page - 1), d.data?.endCursor ?? '']);
-    setPage(p);
-  };
 
   const filterSelect = (
     <select
@@ -50,8 +36,11 @@ export function OwnerSuppliersTab() {
   return (
     <SuppliersTable
       data={d.data}
-      page={page}
-      onPageChange={onPageChange}
+      page={d.page}
+      canNext={d.canNext}
+      onPrev={d.prev}
+      onNext={d.next}
+      error={d.error}
       right={filterSelect}
       emptyLabel={filter === 'all' ? 'No suppliers found for these owners.' : 'No suppliers match this filter.'}
     />

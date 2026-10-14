@@ -15,19 +15,25 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 // Shared suppliers table (Operator tool + Owner tool). Presentational: the parent fetches the page
-// and owns the page cursors (each page after the first reads the rows after the previous page's
-// endCursor); `right` holds the header controls (a status filter for the Owner tool).
+// and owns the page cursors (useCursorPages: each page after the first reads the rows after the previous
+// page's endCursor); `right` holds the header controls (a status filter for the Owner tool).
 export function SuppliersTable({
   data,
   page,
-  onPageChange,
+  canNext,
+  onPrev,
+  onNext,
+  error,
   pageSize = 25,
   right,
   emptyLabel = 'No suppliers found.',
 }: {
   data: SupplierListPage | null;
   page: number;
-  onPageChange: (p: number) => void;
+  canNext: boolean;
+  onPrev: () => void;
+  onNext: () => void;
+  error?: string | null;
   pageSize?: number;
   right?: ReactNode;
   emptyLabel?: string;
@@ -38,7 +44,9 @@ export function SuppliersTable({
   return (
     <Card>
       <CardHeader title="Suppliers" icon={<IconUsers size={18} />} right={right} />
-      {!data ? (
+      {error ? (
+        <EmptyState>{error}</EmptyState>
+      ) : !data ? (
         <ChartSkeleton height={200} />
       ) : totalCount === 0 ? (
         <EmptyState>{emptyLabel}</EmptyState>
@@ -82,8 +90,8 @@ export function SuppliersTable({
           <div className="mt-3.5 flex items-center justify-between gap-3 text-[13px] text-text-secondary">
             <span>{formatNumber(totalCount)} suppliers · page {page} of {formatNumber(pages)}</span>
             <div className="flex gap-1.5">
-              <button type="button" disabled={page <= 1} onClick={() => onPageChange(page - 1)} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Prev</button>
-              <button type="button" disabled={!(data.hasNextPage && data.endCursor)} onClick={() => onPageChange(page + 1)} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>
+              <button type="button" disabled={page <= 1} onClick={onPrev} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Prev</button>
+              <button type="button" disabled={!canNext} onClick={onNext} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>
             </div>
           </div>
         </>

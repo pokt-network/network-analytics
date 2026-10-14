@@ -1,20 +1,14 @@
 import { gqlFetch } from '@/lib/graphql';
 import { NETWORK } from '@/lib/app-config';
 import { UPOKT_PER_POKT } from '@/lib/config';
-import { SUPPLIERS_LIST, SUPPLIER_SERVICE_COUNTS, OPERATOR_SUPPLIERS, SUPPLIER_FLEET_SUMMARY, SUPPLIER_MIN_STAKE } from '@/lib/queries/analytics';
+import { OWNER_SUPPLIERS, OPERATOR_SUPPLIERS, SUPPLIER_FLEET_SUMMARY, SUPPLIER_MIN_STAKE } from '@/lib/queries/analytics';
 import { num } from './_util';
 
 const toPokt = (u: number) => u / UPOKT_PER_POKT;
 
-// Supplier-list fetches for the staking tools: the Owner tool passes an ownerId filter (built by the caller) to the
-// suppliers list, the Operator tool its rev-share addresses to the fleet function.
-
-interface SupplierNodeRaw {
-  id: string;
-  ownerId: string;
-  stakeAmount: string | number;
-  stakeStatus: string;
-}
+// Supplier-list fetches for the staking tools: one page of a fleet from getSupplierFleetList (the Owner tool's owners,
+// the Operator tool's rev-share addresses as operators), largest stake first then by id, paged by keyset, with the count
+// in the same request.
 
 interface FleetRowRaw {
   supplierId: string;
@@ -40,74 +34,30 @@ export interface SupplierListPage {
   endCursor?: string | null;
 }
 
-/** One page of the suppliers matching `filter`: the first, or the one after `after` (the endCursor of the page before). */
-export async function fetchSuppliers(
-  filter: Record<string, unknown>,
-  after: string | null,
-  pageSize: number,
-  revalidate = 1800,
-): Promise<SupplierListPage> {
-  const data = await gqlFetch<{
-    suppliers: { totalCount: number; pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: SupplierNodeRaw[] } | null;
-  }>(NETWORK, SUPPLIERS_LIST, { filter, first: pageSize, after }, { revalidate });
-  const d = data.suppliers;
-  const nodes = d?.nodes ?? [];
-  const services = await serviceCounts(nodes.map((n) => n.id), revalidate);
-  return {
-    totalCount: d?.totalCount ?? 0,
-    hasNextPage: d?.pageInfo?.hasNextPage ?? false,
-    endCursor: d?.pageInfo?.endCursor ?? null,
-    rows: nodes.map((n) => ({
-      operator: n.id,
-      owner: n.ownerId,
-      stakePokt: toPokt(num(n.stakeAmount)),
-      status: n.stakeStatus,
-      services: services.get(n.id) ?? 0,
-    })),
-  };
+/** The rows that follow a page's last row (its endCursor, `stake:id`) in the fleet function's order: a smaller stake, or
+ *  the same stake and a larger id. Null on the first page (the indexer refuses a null filter, so it is left out). */
+function keysetFilter(after: string | null): Record<string, unknown> | null {
+  if (!after) return null;
+  const cut = after.indexOf(':');
+  if (cut <= 0) throw new Error(`supplier list: invalid cursor ${after}`);
+  const [stake, id] = [after.slice(0, cut), after.slice(cut + 1)];
+  return { or: [{ stakeUpokt: { lessThan: stake } }, { and: [{ stakeUpokt: { equalTo: stake } }, { supplierId: { greaterThan: id } }] }] };
 }
 
-/** The services each supplier has a live config for (at most 200 suppliers), from the fleet function. Every supplier
- *  asked about exists now, so a missing one is an error, not a supplier with no services. */
-async function serviceCounts(ids: string[], revalidate: number): Promise<Map<string, number>> {
-  if (ids.length === 0) return new Map();
-  const data = await gqlFetch<{ getSupplierFleetList: Array<Pick<FleetRowRaw, 'supplierId' | 'serviceCount'>> | null }>(
-    NETWORK,
-    SUPPLIER_SERVICE_COUNTS,
-    { suppliers: ids },
-    { revalidate },
-  );
-  const counts = new Map((data.getSupplierFleetList ?? []).map((r) => [r.supplierId, num(r.serviceCount)]));
-  const missing = ids.filter((id) => !counts.has(id));
-  if (missing.length) throw new Error(`service counts: ${missing.length} of ${ids.length} suppliers missing from the fleet answer`);
-  return counts;
-}
-
-/** One page of the Staked suppliers that share revenue with the operators now, largest stake first, then by id, and
- *  their count: the first page, or the one after `after` (the endCursor of the page before: `stake:id` of its last row). */
-export async function fetchOperatorSuppliers(
-  operators: string[],
-  after: string | null,
-  pageSize: number,
-  revalidate = 1800,
-): Promise<SupplierListPage> {
-  const cut = after ? after.indexOf(':') : -1;
-  const [stake, id] = cut > 0 ? [after!.slice(0, cut), after!.slice(cut + 1)] : [null, null];
-  // the rows that follow (stake, id) in the function's order: a smaller stake, or the same stake and a larger id
-  // (left out on the first page: the indexer refuses a null filter)
-  const keyset = stake === null ? {} : { after: { or: [{ stakeUpokt: { lessThan: stake } }, { and: [{ stakeUpokt: { equalTo: stake } }, { supplierId: { greaterThan: id } }] }] } };
-  // one row past the page tells whether another page follows
-  const data = await gqlFetch<{ rows: FleetRowRaw[] | null; fleet: Array<{ supplierCount: string | number }> | null }>(
-    NETWORK,
-    OPERATOR_SUPPLIERS,
-    { operators, first: pageSize + 1, ...keyset },
-    { revalidate },
-  );
-  const all = data.rows ?? [];
+/** A page from the rows asked for (pageSize + 1: the extra one tells whether another page follows). getSupplierFleetList
+ *  takes no orderBy: the keyset relies on its own ORDER BY (stake desc, then id), so a row out of that order fails the
+ *  page instead of paging wrong. */
+function toPage(all: FleetRowRaw[], pageSize: number, totalCount: number): SupplierListPage {
+  for (let i = 1; i < all.length; i++) {
+    const [a, b] = [BigInt(String(all[i - 1].stakeUpokt)), BigInt(String(all[i].stakeUpokt))];
+    if (a < b || (a === b && all[i - 1].supplierId >= all[i].supplierId)) {
+      throw new Error('supplier list: rows out of the (stake desc, id) order the paging relies on');
+    }
+  }
   const page = all.slice(0, pageSize);
   const last = page[page.length - 1];
   return {
-    totalCount: num(data.fleet?.[0]?.supplierCount),
+    totalCount,
     hasNextPage: all.length > pageSize,
     endCursor: last ? `${last.stakeUpokt}:${last.supplierId}` : null,
     rows: page.map((r) => ({
@@ -118,6 +68,53 @@ export async function fetchOperatorSuppliers(
       services: num(r.serviceCount),
     })),
   };
+}
+
+/** One page of the suppliers the owners own now, with a stake-status filter (`below_min` needs the current min stake),
+ *  and their count: the first page, or the one after `after` (the endCursor of the page before). */
+export async function fetchOwnerSuppliers(
+  owners: string[],
+  filter: StakeFilter,
+  minStakeUpokt: number,
+  after: string | null,
+  pageSize: number,
+  revalidate = 1800,
+): Promise<SupplierListPage> {
+  const stakeStatuses = filter === 'all' ? null : filter === 'unstaking' ? ['Unstaking'] : filter === 'unstaked' ? ['Unstaked'] : ['Staked'];
+  const conds = [keysetFilter(after), filter === 'below_min' ? { stakeUpokt: { lessThanOrEqualTo: String(minStakeUpokt) } } : null].filter(
+    (c): c is Record<string, unknown> => c !== null,
+  );
+  const data = await gqlFetch<{ rows: FleetRowRaw[] | null; count: { totalCount: number } | null }>(
+    NETWORK,
+    OWNER_SUPPLIERS,
+    {
+      owners,
+      stakeStatuses,
+      first: pageSize + 1,
+      countFilter: { ownerId: { in: owners }, ...statusClause(filter, minStakeUpokt) },
+      ...(conds.length ? { after: conds.length === 1 ? conds[0] : { and: conds } } : {}),
+    },
+    { revalidate },
+  );
+  return toPage(data.rows ?? [], pageSize, data.count?.totalCount ?? 0);
+}
+
+/** One page of the Staked suppliers that share revenue with the operators now, and their count: the first page, or the
+ *  one after `after` (the endCursor of the page before). */
+export async function fetchOperatorSuppliers(
+  operators: string[],
+  after: string | null,
+  pageSize: number,
+  revalidate = 1800,
+): Promise<SupplierListPage> {
+  const keyset = keysetFilter(after);
+  const data = await gqlFetch<{ rows: FleetRowRaw[] | null; fleet: Array<{ supplierCount: string | number }> | null }>(
+    NETWORK,
+    OPERATOR_SUPPLIERS,
+    { operators, first: pageSize + 1, ...(keyset ? { after: keyset } : {}) },
+    { revalidate },
+  );
+  return toPage(data.rows ?? [], pageSize, num(data.fleet?.[0]?.supplierCount));
 }
 
 /** A fleet's supplier count and combined stake (upokt), for owners or operators. */

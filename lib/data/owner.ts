@@ -9,10 +9,11 @@ import {
   REWARDS_BY_DATE_GROUPED,
   OWNER_CLAIMS,
   OWNER_SETTLED_CLAIMS,
+  SUPPLIER_OWNERS,
 } from '@/lib/queries/analytics';
 import { num, parseScalar } from './_util';
 import { unwrapRange, notCovered, fillCoverage, type CoverageRange } from './coverage';
-import { fetchFleetSummary, fetchSuppliers, getMinStakeUpokt, statusClause, type StakeFilter, type SupplierListPage } from './suppliers-list';
+import { fetchFleetSummary, fetchOwnerSuppliers, getMinStakeUpokt, type StakeFilter, type SupplierListPage } from './suppliers-list';
 
 const toPokt = (u: number) => u / UPOKT_PER_POKT;
 
@@ -144,8 +145,7 @@ export async function getOwnerSuppliers(
   pageSize = 25,
 ): Promise<SupplierListPage> {
   const minStake = filter === 'below_min' ? await getMinStakeUpokt() : 0;
-  const supplierFilter = { ownerId: { in: addresses }, ...statusClause(filter, minStake) };
-  return fetchSuppliers(supplierFilter, after, pageSize);
+  return fetchOwnerSuppliers(addresses, filter, minStake, after, pageSize);
 }
 
 interface ClaimRaw {
@@ -164,15 +164,15 @@ export interface Issuance {
   serviceId: string;
   /** Operator (node) address — the supplier that settled this claim. */
   operator: string;
-  /** Owner of that supplier as the settlement recorded it. */
+  /** Owner of that supplier as the settlement recorded it, or its current owner where the settlement recorded none. */
   owner: string;
+  /** 'settlement': the owner the settlement recorded; 'current': the supplier's owner now (the settlement has none). */
+  ownerAsOf: 'settlement' | 'current';
   relays: number;
   settledUpokt: number;
   mintedUpokt: number;
   /** Minted over settled. */
   mintRatio: number;
-  /** Always null: settlements happen in the block's end, not in a transaction. */
-  transactionId: string | null;
 }
 
 export interface IssuancePage {
@@ -200,6 +200,7 @@ export async function getOwnerIssuances(addresses: string[], pageSize = 25, afte
   const all = claims ?? [];
   const page = all.slice(0, pageSize);
   const last = page[page.length - 1];
+  const current = await currentOwners([...new Set(page.filter((n) => !n.supplier_owner_id).map((n) => n.supplier_id))]);
   return {
     range,
     endCursor: last ? `${last.height}:${last.event_idx}` : null,
@@ -211,13 +212,29 @@ export async function getOwnerIssuances(addresses: string[], pageSize = 25, afte
         block: num(n.height),
         serviceId: n.service_id,
         operator: n.supplier_id,
-        owner: n.supplier_owner_id ?? '',
+        owner: n.supplier_owner_id || current.get(n.supplier_id)!,
+        ownerAsOf: n.supplier_owner_id ? 'settlement' : 'current',
         relays: num(n.relays),
         settledUpokt: settled,
         mintedUpokt: minted,
         mintRatio: settled > 0 ? minted / settled : 0,
-        transactionId: null,
       };
     }),
   };
+}
+
+/** The current owner of each supplier (a flat lookup by id), for the settlements that recorded none (211 rows on
+ *  mainnet, all at heights 461433-689253). Every supplier that settled exists, so a missing one is an error. */
+async function currentOwners(ids: string[]): Promise<Map<string, string>> {
+  if (ids.length === 0) return new Map();
+  const data = await gqlFetch<{ suppliers: { nodes: Array<{ id: string; ownerId: string }> } | null }>(
+    NETWORK,
+    SUPPLIER_OWNERS,
+    { ids, first: ids.length },
+    { revalidate: 1800 },
+  );
+  const owners = new Map((data.suppliers?.nodes ?? []).map((n) => [n.id, n.ownerId]));
+  const missing = ids.filter((id) => !owners.get(id));
+  if (missing.length) throw new Error(`issuances: no current owner for ${missing.length} of ${ids.length} suppliers`);
+  return owners;
 }

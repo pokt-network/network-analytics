@@ -8,6 +8,8 @@ interface State<T> {
   data: T | null;
   loading: boolean;
   error: string | null;
+  /** The url `data` was fetched for: while a new url loads, the previous one's data stays on screen. */
+  url?: string | null;
 }
 
 // ── Module-level SWR-lite cache ──────────────────────────────────────────────
@@ -118,14 +120,14 @@ export function useTabData<T>(url: string, opts: { prefetchSiblings?: boolean } 
 
   const [state, setState] = useState<State<T>>(() => {
     const c = url ? cache.get(url) : undefined;
-    return c ? { data: c.data as T, loading: false, error: null } : { data: null, loading: !!url, error: null };
+    return c ? { data: c.data as T, loading: false, error: null, url } : { data: null, loading: !!url, error: null, url: null };
   });
 
   useEffect(() => {
     if (!url) {
       // Intentional: this is a data-fetching hook; going idle on an empty url is the sync we want.
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setState({ data: null, loading: false, error: null });
+      setState({ data: null, loading: false, error: null, url: null });
       return;
     }
 
@@ -134,29 +136,29 @@ export function useTabData<T>(url: string, opts: { prefetchSiblings?: boolean } 
 
     if (cached) {
       // Instant paint from cache; quietly revalidate if it's gone stale (no indicator flash).
-      setState({ data: cached.data as T, loading: false, error: null });
+      setState({ data: cached.data as T, loading: false, error: null, url });
       // Already client-cached (a revisit) → the server built this at least once; warm the siblings
       // unless the last observed server state was cold.
       if (doPrefetch) maybePrefetchSiblings(url);
       if (Date.now() - cached.ts > STALE_MS) {
         fetchJson(url, false)
           .then((json) => {
-            if (active) setState({ data: json as T, loading: false, error: null });
+            if (active) setState({ data: json as T, loading: false, error: null, url });
           })
           .catch(() => {});
       }
     } else {
       // Cold for this URL: keep any prior data on screen, show the indicator, fetch.
-      setState((s) => ({ data: s.data, loading: true, error: null }));
+      setState((s) => ({ data: s.data, loading: true, error: null, url: s.url }));
       fetchJson(url, true)
         .then((json) => {
-          if (active) setState({ data: json as T, loading: false, error: null });
+          if (active) setState({ data: json as T, loading: false, error: null, url });
           // Only now is the primary's cache status known — prefetch siblings iff it wasn't a MISS.
           if (doPrefetch) maybePrefetchSiblings(url);
         })
         .catch((e: Error) => {
           // Drop the prior data: it belongs to the previous url and must not show under this one.
-          if (active && e.name !== 'AbortError') setState({ data: null, loading: false, error: e.message });
+          if (active && e.name !== 'AbortError') setState({ data: null, loading: false, error: e.message, url: null });
         });
     }
 

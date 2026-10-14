@@ -197,21 +197,15 @@ export async function getOperatorOverserviced(addresses: string[], range: RangeK
 
 // ── Slashing ──
 interface SlashRaw {
-  height: string | number;
+  height: string;
   id: string;
-  actorId: string;
-  penaltyUpokt: string | number;
-  previousStakeUpokt: string | number;
-  stakeUpokt: string | number;
-  proofValidationStatus: string | null;
-  serviceId: string | null;
-  applicationId: string | null;
-}
-
-interface SlashTotalRaw {
-  kind: string;
-  events: string | number | null;
-  slashed_upokt: string | null;
+  actor_id: string;
+  penalty_upokt: string;
+  previous_stake_upokt: string;
+  stake_upokt: string;
+  proof_validation_status: string | null;
+  service_id: string | null;
+  application_id: string | null;
 }
 
 export interface SlashRow {
@@ -225,64 +219,67 @@ export interface SlashRow {
   applicationId: string | null;
 }
 
-export interface SlashPage {
+export interface SlashList {
+  /** Every slashing event in the range, newest first: the view pages and the CSV exports these same rows. */
   rows: SlashRow[];
-  /** Slashing events in the range, and the sum of their penalties (exact, as a decimal string). */
+  /** How many, and the sum of their penalties (exact, as a decimal string), from these rows. */
   totalCount: number;
   penaltyUpokt: string;
   /** False when the indexer covers nothing of the range yet: not indexed, which is not the same as no slashing. */
   indexed: boolean;
-  /** The part of the range the totals cover (the settlement tables can lag the indexed blocks the rows come from). */
-  range?: CoverageRange | null;
-  /** More rows follow this page; pass endCursor as `after` to read them (`height:id` of its last row). */
-  hasNextPage?: boolean;
-  endCursor?: string | null;
+  /** The part of the range the indexed blocks cover. */
+  range: CoverageRange | null;
+  /** False when the walk stopped at its call cap with rows left: the rows are the most recent ones only. */
+  complete: boolean;
 }
 
-/** The operator's suppliers' slashing events in a range, newest first: the first page, or the rows after `after` (the
- *  endCursor of the page before), with the range's count and penalty sum. */
-export async function getOperatorSlashes(addresses: string[], range: RangeKey, pageSize = 25, after: string | null = null): Promise<SlashPage> {
+/** Calls of 1000 rows the walk makes at most: 20,000 slashing events in a range. */
+const SLASH_WALK_MAX_CALLS = 20;
+const SLASH_ROW_LIMIT = 1000;
+
+/** Every slashing event of the operators' suppliers in a range, newest first, read in one walk (keyset on height and id,
+ *  until a call comes back short), with their count and penalty sum. The caller caches the whole result. */
+export async function getOperatorSlashes(addresses: string[], range: RangeKey): Promise<SlashList> {
   const w = rangeWindow(range);
-  const cut = after ? after.indexOf(':') : -1;
-  // one row past the page tells whether another page follows; the catalog returns at most 1000 rows a call, so a page
-  // of 1000 that comes back full may be followed by an empty one
-  const rowLimit = Math.min(pageSize + 1, 1000);
-  const data = await gqlFetch<{ getActorLifecycleList: SlashRaw[] | null; getSupplierPenaltiesJson: unknown }>(
-    NETWORK,
-    SUPPLIER_SLASHES,
-    {
-      operators: addresses,
-      start: w.startISO,
-      end: w.endISO,
-      rowLimit,
-      beforeHeight: cut > 0 ? after!.slice(0, cut) : null,
-      beforeId: cut > 0 ? after!.slice(cut + 1) : null,
-    },
-    { revalidate: 300 },
-  );
-  const t = unwrapRange<SlashTotalRaw[]>(parseScalar(data.getSupplierPenaltiesJson), false);
-  if (notCovered(t.range)) return { rows: [], totalCount: 0, penaltyUpokt: '0', indexed: false, range: t.range };
-  // one row per reason (PROOF_MISSING, PROOF_INVALID)
-  const slashed = (t.data ?? []).filter((r) => r.kind === 'slashed');
-  const all = data.getActorLifecycleList ?? [];
-  const nodes = all.slice(0, pageSize);
-  const last = nodes[nodes.length - 1];
+  const raw: SlashRaw[] = [];
+  let covered: CoverageRange | null = null;
+  let before: { beforeHeight: string; beforeId: string } | null = null;
+  let complete = false;
+  for (let calls = 0; calls < SLASH_WALK_MAX_CALLS; calls++) {
+    const data: { getActorLifecycleJson: unknown } = await gqlFetch(
+      NETWORK,
+      SUPPLIER_SLASHES,
+      { operators: addresses, start: w.startISO, end: w.endISO, rowLimit: SLASH_ROW_LIMIT, beforeHeight: before?.beforeHeight ?? null, beforeId: before?.beforeId ?? null },
+      // no per-call cache: the route caches the whole walk, one read
+      { cache: 'no-store' },
+    );
+    const page: { data: SlashRaw[] | null; range: CoverageRange | null } = unwrapRange<SlashRaw[]>(parseScalar(data.getActorLifecycleJson), false);
+    if (calls === 0) covered = page.range;
+    const got: SlashRaw[] = page.data ?? [];
+    raw.push(...got);
+    if (got.length < SLASH_ROW_LIMIT) {
+      complete = true;
+      break;
+    }
+    const last: SlashRaw = got[got.length - 1];
+    before = { beforeHeight: last.height, beforeId: last.id };
+  }
+  if (notCovered(covered)) return { rows: [], totalCount: 0, penaltyUpokt: '0', indexed: false, range: covered, complete: true };
   return {
-    totalCount: slashed.reduce((s, r) => s + num(r.events), 0),
-    penaltyUpokt: slashed.reduce((s, r) => s + BigInt(r.slashed_upokt ?? '0'), BigInt(0)).toString(),
+    totalCount: raw.length,
+    penaltyUpokt: raw.reduce((s, r) => s + BigInt(r.penalty_upokt ?? '0'), BigInt(0)).toString(),
     indexed: true,
-    range: t.range,
-    hasNextPage: all.length === rowLimit,
-    endCursor: last ? `${last.height}:${last.id}` : null,
-    rows: nodes.map((n) => ({
-      supplier: n.actorId,
+    range: covered,
+    complete,
+    rows: raw.map((n) => ({
+      supplier: n.actor_id,
       block: num(n.height),
-      penaltyUpokt: num(n.penaltyUpokt),
-      prevStakeUpokt: num(n.previousStakeUpokt),
-      afterStakeUpokt: num(n.stakeUpokt),
-      proofStatus: n.proofValidationStatus,
-      serviceId: n.serviceId,
-      applicationId: n.applicationId,
+      penaltyUpokt: num(n.penalty_upokt),
+      prevStakeUpokt: num(n.previous_stake_upokt),
+      afterStakeUpokt: num(n.stake_upokt),
+      proofStatus: n.proof_validation_status,
+      serviceId: n.service_id,
+      applicationId: n.application_id,
     })),
   };
 }

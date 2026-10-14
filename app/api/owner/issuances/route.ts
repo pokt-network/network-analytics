@@ -25,7 +25,8 @@ export async function GET(req: NextRequest) {
   const pageSize = Number.isFinite(reqSize) && reqSize > 0 ? Math.min(reqSize, MAX_PAGE_SIZE) : PAGE_SIZE;
   // after=<endCursor of the previous page> reads the rows that follow it; without it, the first page.
   const afterParam = req.nextUrl.searchParams.get('after');
-  if (afterParam && !CURSOR_RE.test(afterParam)) return NextResponse.json({ error: 'invalid after cursor' }, { status: 400 });
+  // an after that is present but empty or malformed is an error, never read as the first page
+  if (afterParam !== null && !CURSOR_RE.test(afterParam)) return NextResponse.json({ error: 'invalid after cursor' }, { status: 400 });
   const after = afterParam || null;
 
   if (addresses.length === 0) {

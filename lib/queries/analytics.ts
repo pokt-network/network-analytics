@@ -166,12 +166,33 @@ export const SUPPLIER_FLEET_SUMMARY = /* GraphQL */ `
   }
 `;
 
-// The suppliers listed (up to 200) now: serviceCount is the number of services each has a live config for.
-export const SUPPLIER_SERVICE_COUNTS = /* GraphQL */ `
-  query supplierServiceCounts($suppliers: [String]) {
-    getSupplierFleetList(suppliers: $suppliers) {
+// One page of the owners' suppliers now (any status; $stakeStatuses keeps some), largest stake first, then by id, and
+// their count, in one request (one snapshot). $after holds the keyset (the rows below the previous page's last stake
+// and id) and, for "below min stake", the stake ceiling. The count is the suppliers list's totalCount under the same
+// own-column filter ($countFilter). serviceCount is the number of services the supplier has a live config for.
+export const OWNER_SUPPLIERS = /* GraphQL */ `
+  query ownerSuppliers($owners: [String], $stakeStatuses: [String], $first: Int, $after: GetSupplierFleetRecordFilter, $countFilter: SupplierFilter!) {
+    rows: getSupplierFleetList(owners: $owners, stakeStatuses: $stakeStatuses, first: $first, filter: $after) {
       supplierId
+      ownerId
+      stakeUpokt
+      stakeStatus
       serviceCount
+    }
+    count: suppliers(filter: $countFilter) {
+      totalCount
+    }
+  }
+`;
+
+// The current owner of each supplier listed (a flat lookup by id).
+export const SUPPLIER_OWNERS = /* GraphQL */ `
+  query supplierOwners($ids: [String!], $first: Int) {
+    suppliers(filter: { id: { in: $ids } }, first: $first) {
+      nodes {
+        id
+        ownerId
+      }
     }
   }
 `;
@@ -227,27 +248,6 @@ export const OVERSERVICED_BY_ADDRESSES = /* GraphQL */ `
   }
 `;
 
-// Suppliers matching a SupplierFilter on their own columns (ownerId + stake status for the Owner tool), ranked by
-// stake, then id. The next page passes $after = the previous page's endCursor, a keyset on (stake, id). The number of
-// services each is configured for comes from SUPPLIER_SERVICE_COUNTS.
-export const SUPPLIERS_LIST = /* GraphQL */ `
-  query suppliersList($filter: SupplierFilter!, $first: Int, $after: Cursor) {
-    suppliers(filter: $filter, orderBy: [STAKE_AMOUNT_DESC, ID_ASC], first: $first, after: $after) {
-      totalCount
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-      nodes {
-        id
-        ownerId
-        stakeAmount
-        stakeStatus
-      }
-    }
-  }
-`;
-
 // Current supplier minimum stake (governance param, upsert-latest). Value is JSON {denom, amount}.
 // Available on the indexer `params` resolver — no LCD needed for this one.
 export const SUPPLIER_MIN_STAKE = /* GraphQL */ `
@@ -260,13 +260,13 @@ export const SUPPLIER_MIN_STAKE = /* GraphQL */ `
   }
 `;
 
-// Slashing events of the operators' suppliers in [start, end), newest first (by height, then id), and the range's
-// totals, in one request (one snapshot). At most $rowLimit rows (up to 1000); the next page passes the last row's height
-// and id as $beforeHeight / $beforeId. stakeUpokt is the stake after the slash; proofValidationStatus can be null. The
-// totals are the getSupplierPenaltiesJson rows of kind 'slashed' (one per reason): events and slashed upokt.
+// Slashing events of the operators' suppliers in [start, end), newest first (by height, then id): {range, data}, range =
+// the part of the window the indexed blocks cover. At most $rowLimit rows (up to 1000); the next call passes the last
+// row's height and id as $beforeHeight / $beforeId. stake_upokt is the stake after the slash; proof_validation_status
+// can be null. Numbers come as strings.
 export const SUPPLIER_SLASHES = /* GraphQL */ `
-  query supplierSlashes($operators: [String], $start: Datetime!, $end: Datetime!, $rowLimit: Int, $beforeHeight: BigInt, $beforeId: String) {
-    getActorLifecycleList(
+  query supplierSlashes($operators: [String], $start: Datetime, $end: Datetime, $rowLimit: Int, $beforeHeight: BigInt, $beforeId: String) {
+    getActorLifecycleJson(
       kind: "supplier"
       addresses: null
       rangeStart: $start
@@ -276,17 +276,6 @@ export const SUPPLIER_SLASHES = /* GraphQL */ `
       rowLimit: $rowLimit
       beforeHeight: $beforeHeight
       beforeId: $beforeId
-    ) {
-      height
-      id
-      actorId
-      penaltyUpokt
-      previousStakeUpokt
-      stakeUpokt
-      proofValidationStatus
-      serviceId
-      applicationId
-    }
-    getSupplierPenaltiesJson(suppliers: null, rangeStart: $start, rangeEnd: $end, bySupplier: false, operators: $operators)
+    )
   }
 `;

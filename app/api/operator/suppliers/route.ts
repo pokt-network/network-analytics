@@ -20,7 +20,8 @@ export async function GET(req: NextRequest) {
 
   // after=<endCursor of the previous page> reads the rows that follow it; without it, the first page.
   const afterParam = req.nextUrl.searchParams.get('after');
-  if (afterParam && !CURSOR_RE.test(afterParam)) return NextResponse.json({ error: 'invalid after cursor' }, { status: 400 });
+  // an after that is present but empty or malformed is an error, never read as the first page
+  if (afterParam !== null && !CURSOR_RE.test(afterParam)) return NextResponse.json({ error: 'invalid after cursor' }, { status: 400 });
 
   if (addresses.length === 0) return NextResponse.json({ rows: [], totalCount: 0 } satisfies SupplierListPage);
   return NextResponse.json(await getOperatorSuppliers(addresses, afterParam || null, pageSize));
