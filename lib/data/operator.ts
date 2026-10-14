@@ -4,40 +4,26 @@ import { UPOKT_PER_POKT } from '@/lib/config';
 import { NETWORK, type RangeKey } from '@/lib/app-config';
 import { rangeWindow, rangeTTL } from '@/lib/timeranges';
 import {
-  OPERATOR_SUPPLIER_SUMMARY,
   OPERATOR_CLAIMS_SETTLED,
   OPERATOR_CLAIM_PENALTIES,
   REWARDS_BY_ADDRESSES_SERVICE,
   OVERSERVICED_BY_ADDRESSES,
   SUPPLIER_SLASHES,
-  FIRST_BLOCK_SINCE,
 } from '@/lib/queries/analytics';
 import { num, parseScalar } from './_util';
-import { unwrapRange, fillCoverage, type CoverageRange } from './coverage';
+import { unwrapRange, notCovered, fillCoverage, type CoverageRange } from './coverage';
 import { getRewardsWindow } from './owner';
-import { fetchSuppliers, type SupplierListPage } from './suppliers-list';
+import { fetchFleetSummary, fetchOperatorSuppliers, type SupplierListPage } from './suppliers-list';
 
 // Re-export so existing operator-tab imports keep working.
 export type { SupplierRow, SupplierListPage } from './suppliers-list';
 
 const toPokt = (u: number) => u / UPOKT_PER_POKT;
 
-// The Operator tool's addresses are rev-share recipients. A supplier "belongs to" an operator if any
-// of the operator's addresses appears in a serviceConfig's revShare. This builds the SupplierFilter
-// (one serviceConfigs `some` holding an OR of per-address JSONB containment checks) that the fleet summary,
-// the supplier list and the slashing feed scope to. The OR goes inside `some`: one OR of a `some` per address
-// becomes one EXISTS per address in SQL, which with 7 addresses took 2.4–3.4 s against 1.1–2.0 s for the same rows.
-// Passed as a typed GraphQL variable (SupplierFilter) rather than string-interpolated.
-function revShareSupplierFilter(addresses: string[]): Record<string, unknown> {
-  return {
-    serviceConfigs: { some: { or: addresses.map((address) => ({ revShare: { contains: [{ address }] } })) } },
-  };
-}
-
-interface SupplierSummaryRaw {
-  totalCount: number;
-  aggregates: { sum: { stakeAmount: string | number | null } | null } | null;
-}
+// The Operator tool's addresses are rev-share recipients. A supplier "belongs to" an operator if any of the operator's
+// addresses appears in the revShare of one of its live service configs; only Staked suppliers have live configs. The
+// fleet summary, the supplier list and the slashing feed pass the addresses as the catalog's `operators`, which
+// resolves exactly that set.
 
 export interface OperatorSummary {
   supplierCount: number;
@@ -50,18 +36,13 @@ export interface OperatorSummary {
  *  combined stake, plus the trailing-24h/48h rewards paid to the addresses. */
 export async function getOperatorSummary(addresses: string[]): Promise<OperatorSummary> {
   const [fleet, r24, r48] = await Promise.all([
-    gqlFetch<{ suppliers: SupplierSummaryRaw | null }>(
-      NETWORK,
-      OPERATOR_SUPPLIER_SUMMARY,
-      { filter: revShareSupplierFilter(addresses) },
-      { revalidate: 1800 },
-    ),
+    fetchFleetSummary({ operators: addresses }, 1800),
     getRewardsWindow(addresses, 24 * 3600),
     getRewardsWindow(addresses, 48 * 3600),
   ]);
   return {
-    supplierCount: fleet.suppliers?.totalCount ?? 0,
-    stakedPokt: toPokt(num(fleet.suppliers?.aggregates?.sum?.stakeAmount)),
+    supplierCount: fleet.supplierCount,
+    stakedPokt: toPokt(fleet.stakeUpokt),
     rewards24hPokt: r24,
     rewards48hPokt: r48,
   };
@@ -69,7 +50,7 @@ export async function getOperatorSummary(addresses: string[]): Promise<OperatorS
 
 // ── Suppliers list ──
 export async function getOperatorSuppliers(addresses: string[], page: number, pageSize = 25): Promise<SupplierListPage> {
-  return fetchSuppliers(revShareSupplierFilter(addresses), page, pageSize);
+  return fetchOperatorSuppliers(addresses, page, pageSize);
 }
 
 // ── Claim / Proof comparison ──
@@ -216,14 +197,21 @@ export async function getOperatorOverserviced(addresses: string[], range: RangeK
 
 // ── Slashing ──
 interface SlashRaw {
-  supplierId: string;
-  blockId: string | number;
-  proofMissingPenalty: string | number;
-  previousStakeAmount: string | number;
-  afterStakeAmount: string | number;
+  height: string | number;
+  id: string;
+  actorId: string;
+  penaltyUpokt: string | number;
+  previousStakeUpokt: string | number;
+  stakeUpokt: string | number;
   proofValidationStatus: string | null;
   serviceId: string | null;
   applicationId: string | null;
+}
+
+interface SlashTotalRaw {
+  kind: string;
+  events: string | number | null;
+  slashed_upokt: string | null;
 }
 
 export interface SlashRow {
@@ -239,47 +227,56 @@ export interface SlashRow {
 
 export interface SlashPage {
   rows: SlashRow[];
-  /** Slashing events in the range, and the sum of their penalties (exact, as the indexer's decimal string). */
+  /** Slashing events in the range, and the sum of their penalties (exact, as a decimal string). */
   totalCount: number;
   penaltyUpokt: string;
-  /** False when the indexer has no block in the range yet: not indexed, which is not the same as no slashing. */
+  /** False when the indexer covers nothing of the range yet: not indexed, which is not the same as no slashing. */
   indexed: boolean;
+  /** More rows follow this page; pass endCursor as `after` to read them (`height:id` of its last row). */
+  hasNextPage?: boolean;
+  endCursor?: string | null;
 }
 
-/** The operator's suppliers' slashing events in a range (from its first block on), newest first, with the range's
- *  count and penalty sum. */
-export async function getOperatorSlashes(addresses: string[], range: RangeKey, page: number, pageSize = 25): Promise<SlashPage> {
-  const since = await gqlFetch<{ blocks: { nodes: { id: string }[] } | null }>(
-    NETWORK,
-    FIRST_BLOCK_SINCE,
-    { since: rangeWindow(range).startISO },
-    { revalidate: rangeTTL(range) },
-  );
-  const fromBlock = since.blocks?.nodes?.[0]?.id;
-  if (fromBlock == null) return { rows: [], totalCount: 0, penaltyUpokt: '0', indexed: false };
-  const data = await gqlFetch<{
-    eventSupplierSlasheds: { totalCount: number; aggregates: { sum: { proofMissingPenalty: string | null } | null } | null; nodes: SlashRaw[] } | null;
-  }>(
+/** The operator's suppliers' slashing events in a range, newest first: the first page, or the rows after `after` (the
+ *  endCursor of the page before), with the range's count and penalty sum. */
+export async function getOperatorSlashes(addresses: string[], range: RangeKey, pageSize = 25, after: string | null = null): Promise<SlashPage> {
+  const w = rangeWindow(range);
+  const cut = after ? after.indexOf(':') : -1;
+  // one row past the page tells whether another page follows; the catalog returns at most 1000 rows a call, so a page
+  // of 1000 that comes back full may be followed by an empty one
+  const rowLimit = Math.min(pageSize + 1, 1000);
+  const data = await gqlFetch<{ getActorLifecycleList: SlashRaw[] | null; getSupplierPenaltiesJson: unknown }>(
     NETWORK,
     SUPPLIER_SLASHES,
     {
-      filter: { supplier: revShareSupplierFilter(addresses), blockId: { greaterThanOrEqualTo: fromBlock } },
-      first: pageSize,
-      offset: (page - 1) * pageSize,
+      operators: addresses,
+      start: w.startISO,
+      end: w.endISO,
+      rowLimit,
+      beforeHeight: cut > 0 ? after!.slice(0, cut) : null,
+      beforeId: cut > 0 ? after!.slice(cut + 1) : null,
     },
     { revalidate: 300 },
   );
-  const d = data.eventSupplierSlasheds;
+  const t = unwrapRange<SlashTotalRaw[]>(parseScalar(data.getSupplierPenaltiesJson), false);
+  if (notCovered(t.range)) return { rows: [], totalCount: 0, penaltyUpokt: '0', indexed: false };
+  // one row per reason (PROOF_MISSING, PROOF_INVALID)
+  const slashed = (t.data ?? []).filter((r) => r.kind === 'slashed');
+  const all = data.getActorLifecycleList ?? [];
+  const nodes = all.slice(0, pageSize);
+  const last = nodes[nodes.length - 1];
   return {
-    totalCount: d?.totalCount ?? 0,
-    penaltyUpokt: d?.aggregates?.sum?.proofMissingPenalty ?? '0',
+    totalCount: slashed.reduce((s, r) => s + num(r.events), 0),
+    penaltyUpokt: slashed.reduce((s, r) => s + BigInt(r.slashed_upokt ?? '0'), BigInt(0)).toString(),
     indexed: true,
-    rows: (d?.nodes ?? []).map((n) => ({
-      supplier: n.supplierId,
-      block: num(n.blockId),
-      penaltyUpokt: num(n.proofMissingPenalty),
-      prevStakeUpokt: num(n.previousStakeAmount),
-      afterStakeUpokt: num(n.afterStakeAmount),
+    hasNextPage: all.length === rowLimit,
+    endCursor: last ? `${last.height}:${last.id}` : null,
+    rows: nodes.map((n) => ({
+      supplier: n.actorId,
+      block: num(n.height),
+      penaltyUpokt: num(n.penaltyUpokt),
+      prevStakeUpokt: num(n.previousStakeUpokt),
+      afterStakeUpokt: num(n.stakeUpokt),
       proofStatus: n.proofValidationStatus,
       serviceId: n.serviceId,
       applicationId: n.applicationId,

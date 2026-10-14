@@ -43,32 +43,17 @@ export const CLAIM_PROOFS_BY_TIME = /* GraphQL */ `
   }
 `;
 
-// Distinct supplier domains (derived from serviceConfig endpoint hosts) + reward sums for ranking.
-export const DOMAINS_DISTINCT = /* GraphQL */ `
-  query domainsDistinct {
-    domainServiceDailyRewards {
-      groupedAggregates(groupBy: [DOMAIN]) {
-        keys
-        sum {
-          grossRewards
-        }
-      }
+// Supplier domains (derived from serviceConfig endpoint hosts) ranked by lifetime claimed rewards, with the Staked
+// suppliers that have a live config on each and their stake, in one call.
+export const SUPPLIER_DOMAINS = /* GraphQL */ `
+  query supplierDomains($top: Int) {
+    getSupplierDomainsList(top: $top) {
+      domain
+      stakedSuppliers
+      stakedUpokt
     }
   }
 `;
-
-// Aggregate supplier count + staked tokens across the passed domains. The resolver sums every domain it
-// is given into one result, so per-domain rows need one call per domain: they go as aliases d0, d1, …
-// of a single request.
-export function supplierStatsByDomainsQuery(count: number): string {
-  const vars = Array.from({ length: count }, (_, i) => `$d${i}: [String]`).join(', ');
-  const fields = Array.from({ length: count }, (_, i) => `d${i}: getSupplierStatsByDomains(pDomains: $d${i})`).join('\n    ');
-  return /* GraphQL */ `
-  query supplierStatsByDomains(${vars}) {
-    ${fields}
-  }
-`;
-}
 
 export const TOTAL_SUPPLY_BY_DAY = /* GraphQL */ `
   query totalSupplyByDay($start: Datetime, $end: Datetime) {
@@ -138,75 +123,79 @@ export const REWARDS_BY_DATE_GROUPED = /* GraphQL */ `
   }
 `;
 
-// eventClaimSettleds: 23.2M+ rows — ALWAYS filter (by owner) + paginate. transactionId can be null.
-// Filter THROUGH the supplier relation (`supplier.ownerId`), NOT the denormalized `supplierOwnerId`
-// scalar: that column is populated on only ~25% of rows, so filtering on it silently under-reports a
-// fleet's settlements (verified live: relation 5,575,366 vs supplierOwnerId 4,640,974 for one owner).
-// ID_DESC orders the rows of one block, so the order is total. A walk over many pages (the CSV export)
-// passes `after` = the previous page's endCursor, a keyset on (block, id): a settlement indexed meanwhile
-// cannot shift the rows as it does with OFFSET (which then repeats and drops rows across pages). totalCount
-// counts every settlement of the owners (seconds for a large owner), so it is only fetched when asked for.
-// supplierId is the operator (node) address — the useful per-row identity across a fleet.
-export const EVENT_CLAIM_SETTLEDS = /* GraphQL */ `
-  query eventClaimSettleds($owners: [String!], $first: Int, $offset: Int, $after: Cursor, $withCount: Boolean!) {
-    eventClaimSettleds(filter: { supplier: { ownerId: { in: $owners } } }, orderBy: [BLOCK_ID_DESC, ID_DESC], first: $first, offset: $offset, after: $after) {
-      totalCount @include(if: $withCount)
-      pageInfo {
-        endCursor
-        hasNextPage
-      }
-      nodes {
-        serviceId
-        numRelays
-        claimedAmount
-        settledAmount
-        mintedAmount
-        mintRatio
-        transactionId
-        blockId
-        supplierId
-        supplierOwnerId
-        supplier {
-          ownerId
-        }
-      }
+// Settled claims of the suppliers the owners own now, newest first (by height, then event_idx), over the whole
+// history, from the settlement catalog. At most $rowLimit rows (up to 1000); the next page passes the last row's
+// height and eventIdx as $beforeHeight / $beforeEventIdx, a keyset: a settlement indexed meanwhile cannot shift the
+// rows as it does with OFFSET. supplierId is the operator (node) address — the useful per-row identity across a fleet;
+// supplierOwnerId is the owner the settlement recorded.
+export const OWNER_CLAIMS = /* GraphQL */ `
+  query ownerClaims($owners: [String], $rowLimit: Int, $beforeHeight: BigInt, $beforeEventIdx: Int) {
+    getClaimsList(
+      suppliers: null
+      rangeStart: null
+      rangeEnd: null
+      owners: $owners
+      statuses: ["settled"]
+      rowLimit: $rowLimit
+      beforeHeight: $beforeHeight
+      beforeEventIdx: $beforeEventIdx
+    ) {
+      height
+      eventIdx
+      serviceId
+      relays
+      settledUpokt
+      relayMintedUpokt
+      supplierId
+      supplierOwnerId
     }
   }
 `;
 
 // ── Operator / Owner suppliers + stake-filter queries (staking tools) ──
-export const SUPPLIER_OWNER_SUMMARY = /* GraphQL */ `
-  query supplierOwnerSummary($owners: [String!]) {
-    suppliers(filter: { ownerId: { in: $owners } }) {
-      totalCount
-      aggregates {
-        sum {
-          stakeAmount
-        }
-      }
+// One row for the whole fleet now: how many suppliers and their combined stake. Pass owners (the suppliers they own
+// now) or operators (the Staked suppliers whose service configs share revenue with them now), not both.
+export const SUPPLIER_FLEET_SUMMARY = /* GraphQL */ `
+  query supplierFleetSummary($owners: [String], $operators: [String]) {
+    getSupplierFleetList(owners: $owners, operators: $operators, bySupplier: false) {
+      supplierCount
+      stakeUpokt
+    }
+  }
+`;
+
+// The suppliers listed (up to 200) now: serviceCount is the number of services each has a live config for.
+export const SUPPLIER_SERVICE_COUNTS = /* GraphQL */ `
+  query supplierServiceCounts($suppliers: [String]) {
+    getSupplierFleetList(suppliers: $suppliers) {
+      supplierId
+      serviceCount
+    }
+  }
+`;
+
+// One page of the operators' suppliers now, largest stake first, and their count, in one request (one snapshot).
+// serviceCount is the number of services the supplier has a live config for.
+export const OPERATOR_SUPPLIERS = /* GraphQL */ `
+  query operatorSuppliers($operators: [String], $first: Int, $offset: Int) {
+    rows: getSupplierFleetList(operators: $operators, first: $first, offset: $offset) {
+      supplierId
+      ownerId
+      stakeUpokt
+      stakeStatus
+      serviceCount
+    }
+    fleet: getSupplierFleetList(operators: $operators, bySupplier: false) {
+      supplierCount
     }
   }
 `;
 
 // ── Operator Staking (addresses are rev-share recipients, not owners) ──
 // The Operator tool's addresses are the rev-share / node-runner addresses that appear in a supplier's
-// serviceConfig.revShare. The fleet rollup + slashes are therefore scoped by a SupplierFilter built
-// in lib/data/operator.ts (an OR of per-address `serviceConfigs.some.revShare.contains`), passed as a
-// typed variable rather than string-built. The rewards-by-service and overserviced resolvers take the
-// rev-share addresses directly; the claim/proof ones take them as the catalog's `operators`.
-
-export const OPERATOR_SUPPLIER_SUMMARY = /* GraphQL */ `
-  query operatorSupplierSummary($filter: SupplierFilter!) {
-    suppliers(filter: $filter) {
-      totalCount
-      aggregates {
-        sum {
-          stakeAmount
-        }
-      }
-    }
-  }
-`;
+// serviceConfig.revShare. The fleet rollup, the supplier list, the claim/proof series and the slashes take them as the
+// catalog's `operators` (the Staked suppliers whose live service configs share revenue with them). The
+// rewards-by-service and overserviced resolvers take the rev-share addresses directly.
 
 // Settled and expired/discarded claims per bucket of the suppliers that share revenue with the operators now, from the
 // settlement catalog (one aggregate series each).
@@ -234,9 +223,8 @@ export const OVERSERVICED_BY_ADDRESSES = /* GraphQL */ `
   }
 `;
 
-// Suppliers matching an arbitrary SupplierFilter (rev-share for the Operator tool, ownerId + stake
-// status for the Owner tool), ranked by stake. serviceConfigs.totalCount is the number of services
-// the supplier is configured for.
+// Suppliers matching a SupplierFilter on their own columns (ownerId + stake status for the Owner tool), ranked by
+// stake. The number of services each is configured for comes from SUPPLIER_SERVICE_COUNTS.
 export const SUPPLIERS_LIST = /* GraphQL */ `
   query suppliersList($filter: SupplierFilter!, $first: Int, $offset: Int) {
     suppliers(filter: $filter, orderBy: STAKE_AMOUNT_DESC, first: $first, offset: $offset) {
@@ -246,9 +234,6 @@ export const SUPPLIERS_LIST = /* GraphQL */ `
         ownerId
         stakeAmount
         stakeStatus
-        serviceConfigs {
-          totalCount
-        }
       }
     }
   }
@@ -266,40 +251,33 @@ export const SUPPLIER_MIN_STAKE = /* GraphQL */ `
   }
 `;
 
-// Supplier slashing events scoped to the operator's suppliers (filter built from the rev-share
-// addresses) and to a range (blockId from FIRST_BLOCK_SINCE). proofValidationStatus can be null; sessionId can be empty.
+// Slashing events of the operators' suppliers in [start, end), newest first (by height, then id), and the range's
+// totals, in one request (one snapshot). At most $rowLimit rows (up to 1000); the next page passes the last row's height
+// and id as $beforeHeight / $beforeId. stakeUpokt is the stake after the slash; proofValidationStatus can be null. The
+// totals are the getSupplierPenaltiesJson rows of kind 'slashed' (one per reason): events and slashed upokt.
 export const SUPPLIER_SLASHES = /* GraphQL */ `
-  query supplierSlashes($filter: EventSupplierSlashedFilter!, $first: Int, $offset: Int) {
-    eventSupplierSlasheds(filter: $filter, orderBy: BLOCK_ID_DESC, first: $first, offset: $offset) {
-      totalCount
-      aggregates {
-        sum {
-          proofMissingPenalty
-        }
-      }
-      nodes {
-        supplierId
-        blockId
-        proofMissingPenalty
-        previousStakeAmount
-        afterStakeAmount
-        proofValidationStatus
-        serviceId
-        applicationId
-      }
+  query supplierSlashes($operators: [String], $start: Datetime!, $end: Datetime!, $rowLimit: Int, $beforeHeight: BigInt, $beforeId: String) {
+    getActorLifecycleList(
+      kind: "supplier"
+      addresses: null
+      rangeStart: $start
+      rangeEnd: $end
+      operators: $operators
+      events: ["slash"]
+      rowLimit: $rowLimit
+      beforeHeight: $beforeHeight
+      beforeId: $beforeId
+    ) {
+      height
+      id
+      actorId
+      penaltyUpokt
+      previousStakeUpokt
+      stakeUpokt
+      proofValidationStatus
+      serviceId
+      applicationId
     }
-  }
-`;
-
-// The first block at or after a timestamp: a range's start as a height, so a list can filter on its blockId index.
-// Ordered by timestamp so it reads the (timestamp, id) index: ordered by id it walked every block before the range
-// (24h on mainnet: 0.98 s against 0.05 ms, 2026-10-11).
-export const FIRST_BLOCK_SINCE = /* GraphQL */ `
-  query firstBlockSince($since: Datetime!) {
-    blocks(filter: { timestamp: { greaterThanOrEqualTo: $since } }, orderBy: TIMESTAMP_ASC, first: 1) {
-      nodes {
-        id
-      }
-    }
+    getSupplierPenaltiesJson(suppliers: null, rangeStart: $start, rangeEnd: $end, bySupplier: false, operators: $operators)
   }
 `;

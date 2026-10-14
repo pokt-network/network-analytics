@@ -11,18 +11,19 @@ import { toCsv, downloadCsv, csvFilename } from '@/lib/csv';
 import { formatNumber, formatPokt, truncate } from '@/lib/format';
 import { Card, CardHeader } from '@/components/ui/Card';
 
-// CSV export walks the indexer 1000 rows at a time (its page cap), each page after the previous one's
-// cursor (a keyset on block+id, so rows don't shift between pages). A single owner can have ~1M+
+// CSV export walks the indexer 999 rows at a time (the route's page cap), each page after the previous one's
+// cursor (a keyset on height+event index, so rows don't shift between pages). A single owner can have ~1M+
 // settlements, so cap the export at the most-recent N — ~5 chunked requests.
 const EXPORT_CAP = 5000;
-const EXPORT_CHUNK = 1000;
+const EXPORT_CHUNK = 999; // the route's largest page
 
-// Settlement-event history across the owner's fleet. Filtered through the supplier relation
-// (supplier.ownerId), so rows are complete — the denormalized supplierOwnerId under-reports. Paged by
-// hasNextPage rather than a total: counting every settlement of a large owner takes ~15s.
+// Settlement-event history across the owner's fleet (the suppliers the owners own now). Paged by
+// hasNextPage rather than a total: counting every settlement of a large owner takes ~15s. Each page after
+// the first reads the rows after the previous page's endCursor; cursors[i] is the one page i + 1 starts after.
 export function RewardIssuancesTab() {
   const { addresses } = useStakingTool();
   const [page, setPage] = useState(1);
+  const [cursors, setCursors] = useState<string[]>([]);
   const [exporting, setExporting] = useState(false);
   const [exportNote, setExportNote] = useState<string | null>(null);
 
@@ -31,11 +32,14 @@ export function RewardIssuancesTab() {
   if (prevAddr !== addrParam) {
     setPrevAddr(addrParam);
     setPage(1);
+    setCursors([]);
   }
 
-  const issuances = useTabData<IssuancePage>(addresses.length ? `/api/owner/issuances?addresses=${addrParam}&page=${page}` : '');
+  const pageAfter = page > 1 ? `&after=${encodeURIComponent(cursors[page - 2] ?? '')}` : '';
+  const issuances = useTabData<IssuancePage>(addresses.length ? `/api/owner/issuances?addresses=${addrParam}${pageAfter}` : '');
   const pageRows = issuances.data?.rows.length ?? 0;
-  const hasNext = issuances.data?.hasNextPage ?? false;
+  const endCursor = issuances.data?.endCursor ?? null;
+  const hasNext = (issuances.data?.hasNextPage ?? false) && !!endCursor;
   const hasRows = page > 1 || pageRows > 0;
 
   async function exportIssuancesCsv() {
@@ -153,7 +157,7 @@ export function RewardIssuancesTab() {
         <span>page {formatNumber(page)}</span>
         <div className="flex gap-1.5">
           <button type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Prev</button>
-          <button type="button" disabled={!hasNext} onClick={() => setPage((p) => p + 1)} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>
+          <button type="button" disabled={!hasNext} onClick={() => { setCursors((c) => [...c.slice(0, page - 1), endCursor!]); setPage((p) => p + 1); }} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>
         </div>
       </div>
       {exportNote && <p className="mt-3 text-[12px] text-text-secondary">{exportNote}</p>}

@@ -7,13 +7,12 @@ import {
   REWARDS_BY_ADDRESSES_TIME,
   REWARDS_BY_ADDRESS_DATE,
   REWARDS_BY_DATE_GROUPED,
-  EVENT_CLAIM_SETTLEDS,
+  OWNER_CLAIMS,
   OWNER_SETTLED_CLAIMS,
-  SUPPLIER_OWNER_SUMMARY,
 } from '@/lib/queries/analytics';
 import { num, parseScalar } from './_util';
 import { unwrapRange, notCovered, fillCoverage, type CoverageRange } from './coverage';
-import { fetchSuppliers, getMinStakeUpokt, statusClause, type StakeFilter, type SupplierListPage } from './suppliers-list';
+import { fetchFleetSummary, fetchSuppliers, getMinStakeUpokt, statusClause, type StakeFilter, type SupplierListPage } from './suppliers-list';
 
 const toPokt = (u: number) => u / UPOKT_PER_POKT;
 
@@ -125,11 +124,6 @@ export async function getRewardsWindow(addresses: string[], seconds: number): Pr
   return ownerTotal(data.legacyRewardsByAddressesAndTime).totalPokt ?? 0;
 }
 
-interface SupplierSummaryRaw {
-  totalCount: number;
-  aggregates: { sum: { stakeAmount: string | number | null } | null } | null;
-}
-
 export interface OwnerSummary {
   supplierCount: number;
   stakedPokt: number;
@@ -138,16 +132,8 @@ export interface OwnerSummary {
 /** Fleet rollup for the Owner summary cards: how many suppliers each owner runs + combined stake.
  *  Owner-keyed (suppliers.ownerId). Range-independent — the reward/claims cards come from /api/owner. */
 export async function getOwnerSummary(addresses: string[]): Promise<OwnerSummary> {
-  const data = await gqlFetch<{ suppliers: SupplierSummaryRaw | null }>(
-    NETWORK,
-    SUPPLIER_OWNER_SUMMARY,
-    { owners: addresses },
-    { revalidate: 1800 },
-  );
-  return {
-    supplierCount: data.suppliers?.totalCount ?? 0,
-    stakedPokt: toPokt(num(data.suppliers?.aggregates?.sum?.stakeAmount)),
-  };
+  const fleet = await fetchFleetSummary({ owners: addresses }, 1800);
+  return { supplierCount: fleet.supplierCount, stakedPokt: toPokt(fleet.stakeUpokt) };
 }
 
 /** Owner's suppliers (fleet), filtered by stake status. `below_min` needs the live min-stake param. */
@@ -162,17 +148,15 @@ export async function getOwnerSuppliers(
   return fetchSuppliers(supplierFilter, page, pageSize);
 }
 
-interface SettleRaw {
+interface ClaimRaw {
+  height: string | number;
+  eventIdx: number;
   serviceId: string;
-  numRelays: string | number;
-  settledAmount: string | number;
-  mintedAmount: string | number;
-  mintRatio: string | number;
-  transactionId: string | null;
-  blockId: string | number;
+  relays: string | number;
+  settledUpokt: string | number;
+  relayMintedUpokt: string | number;
   supplierId: string;
   supplierOwnerId: string | null;
-  supplier: { ownerId: string | null } | null;
 }
 
 export interface Issuance {
@@ -180,52 +164,56 @@ export interface Issuance {
   serviceId: string;
   /** Operator (node) address — the supplier that settled this claim. */
   operator: string;
-  /** Owner of that supplier (from the relation; falls back to the denormalized scalar). */
+  /** Owner of that supplier as the settlement recorded it. */
   owner: string;
   relays: number;
   settledUpokt: number;
   mintedUpokt: number;
+  /** Minted over settled. */
   mintRatio: number;
+  /** Always null: settlements happen in the block's end, not in a transaction. */
   transactionId: string | null;
 }
 
 export interface IssuancePage {
   rows: Issuance[];
-  totalCount?: number; // absent when the caller asked for no count
   hasNextPage: boolean; // more rows follow this page
   endCursor?: string | null; // pass as `after` to read the rows that follow this page
 }
 
-/** One page of settlements, newest first: by page number (offset), or the rows after `after` (a cursor). */
-export async function getOwnerIssuances(
-  addresses: string[],
-  page: number,
-  pageSize = 25,
-  withCount = false, // a count over every settlement of the owners: ~15 s for a large one
-
-  after: string | null = null,
-): Promise<IssuancePage> {
-  const data = await gqlFetch<{ eventClaimSettleds: { totalCount?: number; pageInfo: { endCursor: string | null; hasNextPage: boolean }; nodes: SettleRaw[] } }>(
+/** One page of settlements, newest first: the first page, or the rows after `after` (the endCursor of the page before,
+ *  `height:eventIdx`). */
+export async function getOwnerIssuances(addresses: string[], pageSize = 25, after: string | null = null): Promise<IssuancePage> {
+  const [beforeHeight, beforeEventIdx] = after ? after.split(':') : [null, null];
+  // one row past the page tells whether another page follows; the catalog returns at most 1000 rows a call, so a page
+  // of 1000 that comes back full may be followed by an empty one
+  const rowLimit = Math.min(pageSize + 1, 1000);
+  const data = await gqlFetch<{ getClaimsList: ClaimRaw[] | null }>(
     NETWORK,
-    EVENT_CLAIM_SETTLEDS,
-    { owners: addresses, first: pageSize, offset: after ? null : (page - 1) * pageSize, after, withCount },
+    OWNER_CLAIMS,
+    { owners: addresses, rowLimit, beforeHeight, beforeEventIdx: beforeEventIdx == null ? null : Number(beforeEventIdx) },
     { revalidate: 30 },
   );
-  const d = data.eventClaimSettleds;
+  const all = data.getClaimsList ?? [];
+  const page = all.slice(0, pageSize);
+  const last = page[page.length - 1];
   return {
-    totalCount: withCount ? (d?.totalCount ?? 0) : undefined,
-    endCursor: d?.pageInfo?.endCursor ?? null,
-    hasNextPage: d?.pageInfo?.hasNextPage ?? false,
-    rows: (d?.nodes ?? []).map((n) => ({
-      block: num(n.blockId),
-      serviceId: n.serviceId,
-      operator: n.supplierId,
-      owner: n.supplier?.ownerId ?? n.supplierOwnerId ?? '',
-      relays: num(n.numRelays),
-      settledUpokt: num(n.settledAmount),
-      mintedUpokt: num(n.mintedAmount),
-      mintRatio: num(n.mintRatio),
-      transactionId: n.transactionId,
-    })),
+    endCursor: last ? `${last.height}:${last.eventIdx}` : null,
+    hasNextPage: all.length === rowLimit,
+    rows: page.map((n) => {
+      const settled = num(n.settledUpokt);
+      const minted = num(n.relayMintedUpokt);
+      return {
+        block: num(n.height),
+        serviceId: n.serviceId,
+        operator: n.supplierId,
+        owner: n.supplierOwnerId ?? '',
+        relays: num(n.relays),
+        settledUpokt: settled,
+        mintedUpokt: minted,
+        mintRatio: settled > 0 ? minted / settled : 0,
+        transactionId: null,
+      };
+    }),
   };
 }

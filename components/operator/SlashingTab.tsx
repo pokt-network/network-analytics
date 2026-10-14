@@ -14,13 +14,16 @@ import { toCsv, downloadCsv, csvFilename } from '@/lib/csv';
 
 const PAGE_SIZE = 25;
 const EXPORT_CAP = 5000;
-const EXPORT_CHUNK = 100;
+const EXPORT_CHUNK = 999; // the route's largest page
 
-// Supplier slashing events (proof-missing penalties) for the operator's suppliers, in the view's range.
+// Supplier slashing events (proof-missing penalties) for the operator's suppliers, in the view's range. Each page
+// after the first reads the rows after the previous page's endCursor; cursors[i] is the one page i + 1 starts after.
 export function SlashingTab() {
   const { addresses, range } = useStakingTool();
   const [page, setPage] = useState(1);
+  const [cursors, setCursors] = useState<string[]>([]);
   const [exporting, setExporting] = useState(false);
+  const [exportNote, setExportNote] = useState<string | null>(null);
 
   const addrParam = addresses.join(',');
   const query = `addresses=${addrParam}&range=${range}`;
@@ -28,27 +31,34 @@ export function SlashingTab() {
   if (prevQuery !== query) {
     setPrevQuery(query);
     setPage(1);
+    setCursors([]);
   }
 
-  const d = useTabData<SlashPage>(addresses.length ? `/api/operator/slashing?${query}&page=${page}` : '');
+  const pageAfter = page > 1 ? `&after=${encodeURIComponent(cursors[page - 2] ?? '')}` : '';
+  const d = useTabData<SlashPage>(addresses.length ? `/api/operator/slashing?${query}${pageAfter}` : '');
   const totalCount = d.data?.totalCount ?? 0;
   const pages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const endCursor = d.data?.endCursor ?? null;
+  const hasNext = (d.data?.hasNextPage ?? false) && !!endCursor;
 
   async function exportCsv() {
     if (exporting || addresses.length === 0) return;
     setExporting(true);
+    setExportNote(null);
     try {
       const all: SlashRow[] = [];
-      let p = 1;
-      let total = Infinity;
-      while (all.length < total && all.length < EXPORT_CAP) {
-        const res = await fetch(`/api/operator/slashing?${query}&page=${p}&pageSize=${EXPORT_CHUNK}`);
-        if (!res.ok) break;
+      let after: string | null = null;
+      let total = 0;
+      let more = true;
+      while (more && all.length < EXPORT_CAP) {
+        const next = after ? `&after=${encodeURIComponent(after)}` : '';
+        const res = await fetch(`/api/operator/slashing?${query}&pageSize=${EXPORT_CHUNK}${next}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: SlashPage = await res.json();
-        total = data.totalCount ?? 0;
+        if (!after) total = data.totalCount ?? 0;
         all.push(...data.rows);
-        if (data.rows.length === 0) break;
-        p++;
+        more = (data.hasNextPage ?? false) && !!data.endCursor;
+        after = data.endCursor ?? null;
       }
       const rows = all.slice(0, EXPORT_CAP);
       const headers = ['Supplier', 'Block', 'Penalty (POKT)', 'Prev Stake (POKT)', 'After Stake (POKT)', 'Proof Status', 'Service', 'Application'];
@@ -63,6 +73,15 @@ export function SlashingTab() {
         r.applicationId ?? '',
       ]);
       downloadCsv(csvFilename('operator-slashing'), toCsv(headers, body));
+      setExportNote(
+        rows.length === total
+          ? `Exported all ${formatNumber(rows.length)} slashing events.`
+          : all.length >= EXPORT_CAP
+            ? `Exported the ${formatNumber(rows.length)} most recent of ${formatNumber(total)} slashing events — the export is capped for performance.`
+            : `Exported ${formatNumber(rows.length)} slashing events, but the range counts ${formatNumber(total)}: the list may be incomplete.`,
+      );
+    } catch {
+      setExportNote('Export failed — please try again.');
     } finally {
       setExporting(false);
     }
@@ -134,11 +153,12 @@ export function SlashingTab() {
             </span>
             <div className="flex gap-1.5">
               <button type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Prev</button>
-              <button type="button" disabled={page >= pages} onClick={() => setPage((p) => p + 1)} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>
+              <button type="button" disabled={!hasNext} onClick={() => { setCursors((c) => [...c.slice(0, page - 1), endCursor!]); setPage((p) => p + 1); }} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>
             </div>
           </div>
         </>
       )}
+      {exportNote && <p className="mt-3 text-[12px] text-text-secondary">{exportNote}</p>}
     </Card>
   );
 }
