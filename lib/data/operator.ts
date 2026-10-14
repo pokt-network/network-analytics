@@ -200,10 +200,9 @@ export async function getOperatorOverserviced(addresses: string[], range: RangeK
 // ── Slashing ──
 // The operators' suppliers the tab lists: 'now' (the Staked suppliers whose live service configs share revenue with
 // them: the old rev-share relation filter's set). 'ever' (every supplier that ever shared revenue, so also those slashed
-// and then unstaked) costs ~9 s a call for 7 addresses against ~0.6 s (mainnet, 2026-10-14), and getSupplierPenaltiesJson
-// has no scope to total it: pocketdex function needed. The totals (getSupplierPenaltiesJson, which takes no
-// operatorScope yet) and the rows resolve `operators` to the same set under 'now' (_operator_suppliers on both sides);
-// pass this scope to getSupplierPenaltiesJson too once it accepts one, before switching to 'ever'.
+// and then unstaked) costs ~9 s a call for 7 addresses against ~0.6 s (mainnet, 2026-10-14): pocketdex is making it
+// cheaper. The totals (getSupplierPenaltiesJson) and the rows (getActorLifecycleList) both take this scope, so they
+// always resolve `operators` to the same set.
 const SLASH_OPERATOR_SCOPE = 'now';
 
 interface SlashRaw {

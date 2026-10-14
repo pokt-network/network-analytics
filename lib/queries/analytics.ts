@@ -371,7 +371,14 @@ export const SUPPLIER_SLASHES_RANGE = /* GraphQL */ `
 // hour ($tailStart..$end), which the caller counts past the settlement tables' covered_to (they trail the indexed blocks).
 export const SUPPLIER_SLASH_TOTALS = /* GraphQL */ `
   query supplierSlashTotals($operators: [String], $operatorScope: String, $start: Datetime!, $end: Datetime!, $tailStart: Datetime) {
-    getSupplierPenaltiesJson(suppliers: null, rangeStart: $start, rangeEnd: $end, bySupplier: false, operators: $operators)
+    getSupplierPenaltiesJson(
+      suppliers: null
+      rangeStart: $start
+      rangeEnd: $end
+      bySupplier: false
+      operators: $operators
+      operatorScope: $operatorScope
+    )
     tail: getActorLifecycleList(
       kind: "supplier"
       addresses: null
