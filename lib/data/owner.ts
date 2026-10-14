@@ -140,23 +140,23 @@ export async function getOwnerSummary(addresses: string[]): Promise<OwnerSummary
 export async function getOwnerSuppliers(
   addresses: string[],
   filter: StakeFilter,
-  page: number,
+  after: string | null,
   pageSize = 25,
 ): Promise<SupplierListPage> {
   const minStake = filter === 'below_min' ? await getMinStakeUpokt() : 0;
   const supplierFilter = { ownerId: { in: addresses }, ...statusClause(filter, minStake) };
-  return fetchSuppliers(supplierFilter, page, pageSize);
+  return fetchSuppliers(supplierFilter, after, pageSize);
 }
 
 interface ClaimRaw {
-  height: string | number;
-  eventIdx: number;
-  serviceId: string;
-  relays: string | number;
-  settledUpokt: string | number;
-  relayMintedUpokt: string | number;
-  supplierId: string;
-  supplierOwnerId: string | null;
+  height: string;
+  event_idx: string;
+  service_id: string;
+  relays: string;
+  settled_upokt: string;
+  relay_minted_upokt: string;
+  supplier_id: string;
+  supplier_owner_id: string | null;
 }
 
 export interface Issuance {
@@ -179,6 +179,8 @@ export interface IssuancePage {
   rows: Issuance[];
   hasNextPage: boolean; // more rows follow this page
   endCursor?: string | null; // pass as `after` to read the rows that follow this page
+  /** The part of the history the settlement tables cover (null from an indexer without the range contract). */
+  range?: CoverageRange | null;
 }
 
 /** One page of settlements, newest first: the first page, or the rows after `after` (the endCursor of the page before,
@@ -188,26 +190,28 @@ export async function getOwnerIssuances(addresses: string[], pageSize = 25, afte
   // one row past the page tells whether another page follows; the catalog returns at most 1000 rows a call, so a page
   // of 1000 that comes back full may be followed by an empty one
   const rowLimit = Math.min(pageSize + 1, 1000);
-  const data = await gqlFetch<{ getClaimsList: ClaimRaw[] | null }>(
+  const data = await gqlFetch<{ getClaimsJson: unknown }>(
     NETWORK,
     OWNER_CLAIMS,
     { owners: addresses, rowLimit, beforeHeight, beforeEventIdx: beforeEventIdx == null ? null : Number(beforeEventIdx) },
     { revalidate: 30 },
   );
-  const all = data.getClaimsList ?? [];
+  const { data: claims, range } = unwrapRange<ClaimRaw[]>(parseScalar(data.getClaimsJson), false);
+  const all = claims ?? [];
   const page = all.slice(0, pageSize);
   const last = page[page.length - 1];
   return {
-    endCursor: last ? `${last.height}:${last.eventIdx}` : null,
+    range,
+    endCursor: last ? `${last.height}:${last.event_idx}` : null,
     hasNextPage: all.length === rowLimit,
     rows: page.map((n) => {
-      const settled = num(n.settledUpokt);
-      const minted = num(n.relayMintedUpokt);
+      const settled = num(n.settled_upokt);
+      const minted = num(n.relay_minted_upokt);
       return {
         block: num(n.height),
-        serviceId: n.serviceId,
-        operator: n.supplierId,
-        owner: n.supplierOwnerId ?? '',
+        serviceId: n.service_id,
+        operator: n.supplier_id,
+        owner: n.supplier_owner_id ?? '',
         relays: num(n.relays),
         settledUpokt: settled,
         mintedUpokt: minted,

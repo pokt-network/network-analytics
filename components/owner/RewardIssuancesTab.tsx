@@ -10,12 +10,14 @@ import type { IssuancePage, Issuance } from '@/lib/data/owner';
 import { toCsv, downloadCsv, csvFilename } from '@/lib/csv';
 import { formatNumber, formatPokt, truncate } from '@/lib/format';
 import { Card, CardHeader } from '@/components/ui/Card';
+import { notCovered, rangeNote } from '@/lib/data/coverage';
 
 // CSV export walks the indexer 999 rows at a time (the route's page cap), each page after the previous one's
 // cursor (a keyset on height+event index, so rows don't shift between pages). A single owner can have ~1M+
 // settlements, so cap the export at the most-recent N — ~5 chunked requests.
 const EXPORT_CAP = 5000;
 const EXPORT_CHUNK = 999; // the route's largest page
+const EXPORT_MAX_CALLS = Math.ceil(EXPORT_CAP / EXPORT_CHUNK) + 1;
 
 // Settlement-event history across the owner's fleet (the suppliers the owners own now). Paged by
 // hasNextPage rather than a total: counting every settlement of a large owner takes ~15s. Each page after
@@ -41,6 +43,9 @@ export function RewardIssuancesTab() {
   const endCursor = issuances.data?.endCursor ?? null;
   const hasNext = (issuances.data?.hasNextPage ?? false) && !!endCursor;
   const hasRows = page > 1 || pageRows > 0;
+  // the settlement tables can lag the indexed blocks or have gaps: said, never shown as "no settlements"
+  const range = issuances.data?.range ?? null;
+  const coverageNote = issuances.error ? null : rangeNote(range);
 
   async function exportIssuancesCsv() {
     if (exporting || addresses.length === 0) return;
@@ -50,7 +55,7 @@ export function RewardIssuancesTab() {
       const all: Issuance[] = [];
       let after: string | null = null;
       let more = true;
-      while (more && all.length < EXPORT_CAP) {
+      for (let calls = 0; more && all.length < EXPORT_CAP && calls < EXPORT_MAX_CALLS; calls++) {
         const next = after ? `&after=${encodeURIComponent(after)}` : '';
         const res = await fetch(`/api/owner/issuances?addresses=${addrParam}&pageSize=${EXPORT_CHUNK}${next}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -60,7 +65,7 @@ export function RewardIssuancesTab() {
         after = data.endCursor ?? null;
       }
       const rows = all.slice(0, EXPORT_CAP);
-      const capped = all.length > EXPORT_CAP || (more && all.length >= EXPORT_CAP);
+      const capped = all.length > EXPORT_CAP || more;
       const headers = ['Block', 'Service', 'Operator', 'Owner', 'Relays', 'Settled (POKT)', 'Minted (POKT)', 'Mint Ratio', 'Transaction'];
       const body = rows.map((r) => [
         r.block,
@@ -147,7 +152,7 @@ export function RewardIssuancesTab() {
             ))}
             {issuances.data && pageRows === 0 && (
               <tr>
-                <td colSpan={8} className="px-3 py-10 text-center text-text-tertiary">No settlements found.</td>
+                <td colSpan={8} className="px-3 py-10 text-center text-text-tertiary">{notCovered(range) ? 'No settlements indexed yet.' : 'No settlements found.'}</td>
               </tr>
             )}
           </tbody>
@@ -160,6 +165,7 @@ export function RewardIssuancesTab() {
           <button type="button" disabled={!hasNext} onClick={() => { setCursors((c) => [...c.slice(0, page - 1), endCursor!]); setPage((p) => p + 1); }} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>
         </div>
       </div>
+      {coverageNote && !notCovered(range) && <p className="mt-3 text-[12px] text-text-tertiary">Settlements indexed: {coverageNote}</p>}
       {exportNote && <p className="mt-3 text-[12px] text-text-secondary">{exportNote}</p>}
       <p className="mt-3 text-[12px] italic text-text-tertiary">
         Each row is a settlement event, not a transaction — the Operator is the node that settled it. The ↗ link opens the underlying tx in the Explorer.

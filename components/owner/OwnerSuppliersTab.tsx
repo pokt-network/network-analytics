@@ -11,6 +11,7 @@ import { SuppliersTable } from '@/components/staking/SuppliersTable';
 export function OwnerSuppliersTab() {
   const { addresses } = useStakingTool();
   const [page, setPage] = useState(1);
+  const [cursors, setCursors] = useState<string[]>([]); // cursors[i]: the endCursor page i + 2 starts after
   const [filter, setFilter] = useState<StakeFilter>('all');
 
   const addrParam = addresses.join(',');
@@ -19,11 +20,17 @@ export function OwnerSuppliersTab() {
   if (prevKey !== resetKey) {
     setPrevKey(resetKey);
     setPage(1);
+    setCursors([]);
   }
 
+  const pageAfter = page > 1 ? `&after=${encodeURIComponent(cursors[page - 2] ?? '')}` : '';
   const d = useTabData<SupplierListPage>(
-    addresses.length ? `/api/owner/suppliers?addresses=${addrParam}&page=${page}&filter=${filter}` : '',
+    addresses.length ? `/api/owner/suppliers?addresses=${addrParam}&filter=${filter}${pageAfter}` : '',
   );
+  const onPageChange = (p: number) => {
+    if (p > page) setCursors((c) => [...c.slice(0, page - 1), d.data?.endCursor ?? '']);
+    setPage(p);
+  };
 
   const filterSelect = (
     <select
@@ -44,7 +51,7 @@ export function OwnerSuppliersTab() {
     <SuppliersTable
       data={d.data}
       page={page}
-      onPageChange={setPage}
+      onPageChange={onPageChange}
       right={filterSelect}
       emptyLabel={filter === 'all' ? 'No suppliers found for these owners.' : 'No suppliers match this filter.'}
     />

@@ -79,11 +79,21 @@ export const TOKENOMICS_PARAM = /* GraphQL */ `
   }
 `;
 
+// The last block the indexer processed: the height a walk over several list pages reads every page at.
+export const LAST_PROCESSED_HEIGHT = /* GraphQL */ `
+  query lastProcessedHeight {
+    _metadata {
+      lastProcessedHeight
+    }
+  }
+`;
+
 // Services list (id + label) for the Services picker. The indexer returns up to 1000 rows per page; a longer
-// list is walked with `after` = the previous page's endCursor.
+// list is walked with `after` = the previous page's endCursor, every page at the same $blockHeight (one snapshot).
 export const SERVICES_LIST = /* GraphQL */ `
-  query servicesList($after: Cursor) {
-    services(first: 1000, orderBy: ID_ASC, after: $after) {
+  query servicesList($after: Cursor, $blockHeight: String!) {
+    services(first: 1000, orderBy: ID_ASC, after: $after, blockHeight: $blockHeight) {
+      totalCount
       pageInfo {
         hasNextPage
         endCursor
@@ -124,13 +134,14 @@ export const REWARDS_BY_DATE_GROUPED = /* GraphQL */ `
 `;
 
 // Settled claims of the suppliers the owners own now, newest first (by height, then event_idx), over the whole
-// history, from the settlement catalog. At most $rowLimit rows (up to 1000); the next page passes the last row's
-// height and eventIdx as $beforeHeight / $beforeEventIdx, a keyset: a settlement indexed meanwhile cannot shift the
-// rows as it does with OFFSET. supplierId is the operator (node) address — the useful per-row identity across a fleet;
-// supplierOwnerId is the owner the settlement recorded.
+// history, from the settlement catalog: {range, data}, range = the part of the history the settlement tables cover
+// (they can lag the indexed blocks). At most $rowLimit rows (up to 1000); the next page passes the last row's height
+// and event_idx as $beforeHeight / $beforeEventIdx, a keyset: a settlement indexed meanwhile cannot shift the rows as it
+// does with OFFSET. supplier_id is the operator (node) address — the useful per-row identity across a fleet;
+// supplier_owner_id is the owner the settlement recorded. Numbers come as strings.
 export const OWNER_CLAIMS = /* GraphQL */ `
   query ownerClaims($owners: [String], $rowLimit: Int, $beforeHeight: BigInt, $beforeEventIdx: Int) {
-    getClaimsList(
+    getClaimsJson(
       suppliers: null
       rangeStart: null
       rangeEnd: null
@@ -139,16 +150,7 @@ export const OWNER_CLAIMS = /* GraphQL */ `
       rowLimit: $rowLimit
       beforeHeight: $beforeHeight
       beforeEventIdx: $beforeEventIdx
-    ) {
-      height
-      eventIdx
-      serviceId
-      relays
-      settledUpokt
-      relayMintedUpokt
-      supplierId
-      supplierOwnerId
-    }
+    )
   }
 `;
 
@@ -174,11 +176,13 @@ export const SUPPLIER_SERVICE_COUNTS = /* GraphQL */ `
   }
 `;
 
-// One page of the operators' suppliers now, largest stake first, and their count, in one request (one snapshot).
-// serviceCount is the number of services the supplier has a live config for.
+// One page of the operators' suppliers now, largest stake first (then by id), and their count, in one request (one
+// snapshot). The next page passes $after = the rows below the previous page's last (stake, id), a keyset: a stake
+// change between two pages cannot shift rows as OFFSET does. serviceCount is the number of services the supplier has a
+// live config for.
 export const OPERATOR_SUPPLIERS = /* GraphQL */ `
-  query operatorSuppliers($operators: [String], $first: Int, $offset: Int) {
-    rows: getSupplierFleetList(operators: $operators, first: $first, offset: $offset) {
+  query operatorSuppliers($operators: [String], $first: Int, $after: GetSupplierFleetRecordFilter) {
+    rows: getSupplierFleetList(operators: $operators, first: $first, filter: $after) {
       supplierId
       ownerId
       stakeUpokt
@@ -224,11 +228,16 @@ export const OVERSERVICED_BY_ADDRESSES = /* GraphQL */ `
 `;
 
 // Suppliers matching a SupplierFilter on their own columns (ownerId + stake status for the Owner tool), ranked by
-// stake. The number of services each is configured for comes from SUPPLIER_SERVICE_COUNTS.
+// stake, then id. The next page passes $after = the previous page's endCursor, a keyset on (stake, id). The number of
+// services each is configured for comes from SUPPLIER_SERVICE_COUNTS.
 export const SUPPLIERS_LIST = /* GraphQL */ `
-  query suppliersList($filter: SupplierFilter!, $first: Int, $offset: Int) {
-    suppliers(filter: $filter, orderBy: STAKE_AMOUNT_DESC, first: $first, offset: $offset) {
+  query suppliersList($filter: SupplierFilter!, $first: Int, $after: Cursor) {
+    suppliers(filter: $filter, orderBy: [STAKE_AMOUNT_DESC, ID_ASC], first: $first, after: $after) {
       totalCount
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
       nodes {
         id
         ownerId

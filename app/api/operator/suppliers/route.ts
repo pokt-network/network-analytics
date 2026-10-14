@@ -5,6 +5,8 @@ import { OWNER_ADDRESS_CAP } from '@/lib/app-config';
 
 const PAGE_SIZE = 25;
 const MAX_PAGE_SIZE = 100;
+// endCursor of a page: the last row's stake (upokt) and supplier address
+const CURSOR_RE = /^\d+(\.\d+)?:[a-z0-9]+$/;
 
 function parseAddrs(param: string | null): string[] {
   if (!param) return [];
@@ -13,10 +15,13 @@ function parseAddrs(param: string | null): string[] {
 
 export async function GET(req: NextRequest) {
   const addresses = parseAddrs(req.nextUrl.searchParams.get('addresses'));
-  const page = Math.max(1, Number(req.nextUrl.searchParams.get('page')) || 1);
   const reqSize = Number(req.nextUrl.searchParams.get('pageSize'));
   const pageSize = Number.isFinite(reqSize) && reqSize > 0 ? Math.min(reqSize, MAX_PAGE_SIZE) : PAGE_SIZE;
 
+  // after=<endCursor of the previous page> reads the rows that follow it; without it, the first page.
+  const afterParam = req.nextUrl.searchParams.get('after');
+  if (afterParam && !CURSOR_RE.test(afterParam)) return NextResponse.json({ error: 'invalid after cursor' }, { status: 400 });
+
   if (addresses.length === 0) return NextResponse.json({ rows: [], totalCount: 0 } satisfies SupplierListPage);
-  return NextResponse.json(await getOperatorSuppliers(addresses, page, pageSize));
+  return NextResponse.json(await getOperatorSuppliers(addresses, afterParam || null, pageSize));
 }

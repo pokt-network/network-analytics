@@ -9,12 +9,14 @@ import { useTabData } from '@/lib/use-tab-data';
 import type { SlashPage, SlashRow } from '@/lib/data/operator';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { ChartSkeleton, EmptyState } from '@/components/ui/states';
+import { rangeNote } from '@/lib/data/coverage';
 import { formatNumber, formatPokt, truncate } from '@/lib/format';
 import { toCsv, downloadCsv, csvFilename } from '@/lib/csv';
 
 const PAGE_SIZE = 25;
 const EXPORT_CAP = 5000;
 const EXPORT_CHUNK = 999; // the route's largest page
+const EXPORT_MAX_CALLS = Math.ceil(EXPORT_CAP / EXPORT_CHUNK) + 1;
 
 // Supplier slashing events (proof-missing penalties) for the operator's suppliers, in the view's range. Each page
 // after the first reads the rows after the previous page's endCursor; cursors[i] is the one page i + 1 starts after.
@@ -40,6 +42,9 @@ export function SlashingTab() {
   const pages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
   const endCursor = d.data?.endCursor ?? null;
   const hasNext = (d.data?.hasNextPage ?? false) && !!endCursor;
+  const noRows = page === 1 && (d.data?.rows.length ?? 0) === 0;
+  // the totals cover only what the settlement tables have written: a short coverage is said, never shown as a plain 0
+  const coverageNote = d.error ? null : rangeNote(d.data?.range ?? null, range === '24h' ? 'hour' : 'day');
 
   async function exportCsv() {
     if (exporting || addresses.length === 0) return;
@@ -49,13 +54,15 @@ export function SlashingTab() {
       const all: SlashRow[] = [];
       let after: string | null = null;
       let total = 0;
+      let totalMoved = false;
       let more = true;
-      while (more && all.length < EXPORT_CAP) {
+      for (let calls = 0; more && all.length < EXPORT_CAP && calls < EXPORT_MAX_CALLS; calls++) {
         const next = after ? `&after=${encodeURIComponent(after)}` : '';
         const res = await fetch(`/api/operator/slashing?${query}&pageSize=${EXPORT_CHUNK}${next}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: SlashPage = await res.json();
         if (!after) total = data.totalCount ?? 0;
+        else if ((data.totalCount ?? 0) !== total) totalMoved = true;
         all.push(...data.rows);
         more = (data.hasNextPage ?? false) && !!data.endCursor;
         after = data.endCursor ?? null;
@@ -74,11 +81,13 @@ export function SlashingTab() {
       ]);
       downloadCsv(csvFilename('operator-slashing'), toCsv(headers, body));
       setExportNote(
-        rows.length === total
-          ? `Exported all ${formatNumber(rows.length)} slashing events.`
-          : all.length >= EXPORT_CAP
-            ? `Exported the ${formatNumber(rows.length)} most recent of ${formatNumber(total)} slashing events — the export is capped for performance.`
-            : `Exported ${formatNumber(rows.length)} slashing events, but the range counts ${formatNumber(total)}: the list may be incomplete.`,
+        totalMoved
+          ? `Exported ${formatNumber(rows.length)} slashing events, but the range's count changed during the export: download again.`
+          : rows.length === total
+            ? `Exported all ${formatNumber(rows.length)} slashing events.`
+            : all.length >= EXPORT_CAP || more
+              ? `Exported the ${formatNumber(rows.length)} most recent of ${formatNumber(total)} slashing events — the export is capped for performance.`
+              : `Exported ${formatNumber(rows.length)} slashing events, but the range counts ${formatNumber(total)}: the list may be incomplete.`,
       );
     } catch {
       setExportNote('Export failed — please try again.');
@@ -96,9 +105,9 @@ export function SlashingTab() {
           <button
             type="button"
             onClick={exportCsv}
-            disabled={exporting || totalCount === 0}
+            disabled={exporting || noRows}
             aria-label="Download CSV"
-            title={totalCount === 0 ? 'Nothing to download' : 'Download as CSV'}
+            title={noRows ? 'Nothing to download' : 'Download as CSV'}
             className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border bg-bg-card text-text-secondary transition-colors hover:enabled:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
           >
             <IconDownload size={15} className={exporting ? 'animate-pulse' : ''} />
@@ -109,8 +118,12 @@ export function SlashingTab() {
         <ChartSkeleton height={200} />
       ) : !d.data.indexed ? (
         <EmptyState>The indexer has not reached the last {range} yet.</EmptyState>
-      ) : totalCount === 0 ? (
-        <EmptyState>No slashing events for these addresses in the last {range}.</EmptyState>
+      ) : noRows ? (
+        <EmptyState>
+          {coverageNote
+            ? `No slashing events for these addresses in the indexed part of the last ${range} (${coverageNote}).`
+            : `No slashing events for these addresses in the last ${range}.`}
+        </EmptyState>
       ) : (
         <>
           <div className="overflow-x-auto">
@@ -158,6 +171,7 @@ export function SlashingTab() {
           </div>
         </>
       )}
+      {coverageNote && !noRows && d.data?.indexed && <p className="mt-3 text-[12px] text-text-tertiary">Totals: {coverageNote}</p>}
       {exportNote && <p className="mt-3 text-[12px] text-text-secondary">{exportNote}</p>}
     </Card>
   );

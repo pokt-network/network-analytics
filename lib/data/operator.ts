@@ -49,8 +49,8 @@ export async function getOperatorSummary(addresses: string[]): Promise<OperatorS
 }
 
 // ── Suppliers list ──
-export async function getOperatorSuppliers(addresses: string[], page: number, pageSize = 25): Promise<SupplierListPage> {
-  return fetchOperatorSuppliers(addresses, page, pageSize);
+export async function getOperatorSuppliers(addresses: string[], after: string | null, pageSize = 25): Promise<SupplierListPage> {
+  return fetchOperatorSuppliers(addresses, after, pageSize);
 }
 
 // ── Claim / Proof comparison ──
@@ -232,6 +232,8 @@ export interface SlashPage {
   penaltyUpokt: string;
   /** False when the indexer covers nothing of the range yet: not indexed, which is not the same as no slashing. */
   indexed: boolean;
+  /** The part of the range the totals cover (the settlement tables can lag the indexed blocks the rows come from). */
+  range?: CoverageRange | null;
   /** More rows follow this page; pass endCursor as `after` to read them (`height:id` of its last row). */
   hasNextPage?: boolean;
   endCursor?: string | null;
@@ -259,7 +261,7 @@ export async function getOperatorSlashes(addresses: string[], range: RangeKey, p
     { revalidate: 300 },
   );
   const t = unwrapRange<SlashTotalRaw[]>(parseScalar(data.getSupplierPenaltiesJson), false);
-  if (notCovered(t.range)) return { rows: [], totalCount: 0, penaltyUpokt: '0', indexed: false };
+  if (notCovered(t.range)) return { rows: [], totalCount: 0, penaltyUpokt: '0', indexed: false, range: t.range };
   // one row per reason (PROOF_MISSING, PROOF_INVALID)
   const slashed = (t.data ?? []).filter((r) => r.kind === 'slashed');
   const all = data.getActorLifecycleList ?? [];
@@ -269,6 +271,7 @@ export async function getOperatorSlashes(addresses: string[], range: RangeKey, p
     totalCount: slashed.reduce((s, r) => s + num(r.events), 0),
     penaltyUpokt: slashed.reduce((s, r) => s + BigInt(r.slashed_upokt ?? '0'), BigInt(0)).toString(),
     indexed: true,
+    range: t.range,
     hasNextPage: all.length === rowLimit,
     endCursor: last ? `${last.height}:${last.id}` : null,
     rows: nodes.map((n) => ({

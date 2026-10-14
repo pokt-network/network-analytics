@@ -35,25 +35,28 @@ export interface SupplierRow {
 export interface SupplierListPage {
   rows: SupplierRow[];
   totalCount: number;
+  /** More rows follow this page; pass endCursor as `after` to read them. */
+  hasNextPage?: boolean;
+  endCursor?: string | null;
 }
 
+/** One page of the suppliers matching `filter`: the first, or the one after `after` (the endCursor of the page before). */
 export async function fetchSuppliers(
   filter: Record<string, unknown>,
-  page: number,
+  after: string | null,
   pageSize: number,
   revalidate = 1800,
 ): Promise<SupplierListPage> {
-  const data = await gqlFetch<{ suppliers: { totalCount: number; nodes: SupplierNodeRaw[] } | null }>(
-    NETWORK,
-    SUPPLIERS_LIST,
-    { filter, first: pageSize, offset: (page - 1) * pageSize },
-    { revalidate },
-  );
+  const data = await gqlFetch<{
+    suppliers: { totalCount: number; pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: SupplierNodeRaw[] } | null;
+  }>(NETWORK, SUPPLIERS_LIST, { filter, first: pageSize, after }, { revalidate });
   const d = data.suppliers;
   const nodes = d?.nodes ?? [];
   const services = await serviceCounts(nodes.map((n) => n.id), revalidate);
   return {
     totalCount: d?.totalCount ?? 0,
+    hasNextPage: d?.pageInfo?.hasNextPage ?? false,
+    endCursor: d?.pageInfo?.endCursor ?? null,
     rows: nodes.map((n) => ({
       operator: n.id,
       owner: n.ownerId,
@@ -80,22 +83,34 @@ async function serviceCounts(ids: string[], revalidate: number): Promise<Map<str
   return counts;
 }
 
-/** One page of the Staked suppliers that share revenue with the operators now, largest stake first, and their count. */
+/** One page of the Staked suppliers that share revenue with the operators now, largest stake first, then by id, and
+ *  their count: the first page, or the one after `after` (the endCursor of the page before: `stake:id` of its last row). */
 export async function fetchOperatorSuppliers(
   operators: string[],
-  page: number,
+  after: string | null,
   pageSize: number,
   revalidate = 1800,
 ): Promise<SupplierListPage> {
+  const cut = after ? after.indexOf(':') : -1;
+  const [stake, id] = cut > 0 ? [after!.slice(0, cut), after!.slice(cut + 1)] : [null, null];
+  // the rows that follow (stake, id) in the function's order: a smaller stake, or the same stake and a larger id
+  // (left out on the first page: the indexer refuses a null filter)
+  const keyset = stake === null ? {} : { after: { or: [{ stakeUpokt: { lessThan: stake } }, { and: [{ stakeUpokt: { equalTo: stake } }, { supplierId: { greaterThan: id } }] }] } };
+  // one row past the page tells whether another page follows
   const data = await gqlFetch<{ rows: FleetRowRaw[] | null; fleet: Array<{ supplierCount: string | number }> | null }>(
     NETWORK,
     OPERATOR_SUPPLIERS,
-    { operators, first: pageSize, offset: (page - 1) * pageSize },
+    { operators, first: pageSize + 1, ...keyset },
     { revalidate },
   );
+  const all = data.rows ?? [];
+  const page = all.slice(0, pageSize);
+  const last = page[page.length - 1];
   return {
     totalCount: num(data.fleet?.[0]?.supplierCount),
-    rows: (data.rows ?? []).map((r) => ({
+    hasNextPage: all.length > pageSize,
+    endCursor: last ? `${last.stakeUpokt}:${last.supplierId}` : null,
+    rows: page.map((r) => ({
       operator: r.supplierId,
       owner: r.ownerId ?? '',
       stakePokt: toPokt(num(r.stakeUpokt)),

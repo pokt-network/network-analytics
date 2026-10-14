@@ -3,7 +3,7 @@ import { toDate } from '@/lib/time';
 import { UPOKT_PER_POKT } from '@/lib/config';
 import { NETWORK, type RangeKey } from '@/lib/app-config';
 import { rangeWindow, rangeTTL } from '@/lib/timeranges';
-import { SERVICES_LIST, RELAYS_BY_SERVICE_PER_POINT } from '@/lib/queries/analytics';
+import { LAST_PROCESSED_HEIGHT, SERVICES_LIST, RELAYS_BY_SERVICE_PER_POINT } from '@/lib/queries/analytics';
 import { getServicesPerformance } from './traffic';
 import { num, parseScalar } from './_util';
 
@@ -15,29 +15,28 @@ export interface ServiceListItem {
 /** Pages of 1000 read for the picker before giving up (262 services today fit in the first). */
 const SERVICES_MAX_PAGES = 20;
 
-/** All services (id + label) for the picker: pages of 1000 by cursor, one request today. */
+/** All services (id + label) for the picker: pages of 1000 by cursor, one request today. Every page reads the same
+ *  block height, and a walk that stops short of the count throws: a partial list is never cached as the whole one. */
 export async function getServicesList(): Promise<ServiceListItem[]> {
+  // No per-page fetch cache: the route's unstable_cache keeps the whole walk, so the list is one snapshot.
+  const meta = await gqlFetch<{ _metadata: { lastProcessedHeight: number | string | null } | null }>(NETWORK, LAST_PROCESSED_HEIGHT);
+  const blockHeight = meta._metadata?.lastProcessedHeight;
+  if (blockHeight == null) throw new Error('services list: the indexer reports no processed height');
   const nodes: ServiceListItem[] = [];
   let after: string | null = null;
+  let totalCount = 0;
   for (let page = 0; ; page++) {
-    if (page === SERVICES_MAX_PAGES) {
-      console.warn(`services list: stopped after ${page} pages (${nodes.length} rows), the rest is not listed`);
-      break;
-    }
-    // No per-page fetch cache: the route's unstable_cache keeps the whole walk, so the list is one snapshot.
-    const data: { services: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: ServiceListItem[] } } = await gqlFetch(
-      NETWORK,
-      SERVICES_LIST,
-      { after },
-    );
+    if (page === SERVICES_MAX_PAGES) throw new Error(`services list: stopped after ${page} pages (${nodes.length} rows of ${totalCount})`);
+    const data: {
+      services: { totalCount: number; pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: ServiceListItem[] };
+    } = await gqlFetch(NETWORK, SERVICES_LIST, { after, blockHeight: String(blockHeight) });
+    totalCount = data.services?.totalCount ?? 0;
     nodes.push(...(data.services?.nodes ?? []));
     after = data.services?.pageInfo?.endCursor ?? null;
     if (!data.services?.pageInfo?.hasNextPage) break;
-    if (!after) {
-      console.warn(`services list: more pages but no cursor after ${nodes.length} rows, the rest is not listed`);
-      break;
-    }
+    if (!after) throw new Error(`services list: more pages but no cursor after ${nodes.length} rows of ${totalCount}`);
   }
+  if (nodes.length !== totalCount) throw new Error(`services list: read ${nodes.length} rows, the list counts ${totalCount}`);
   const seen = new Set<string>();
   const out: ServiceListItem[] = [];
   for (const n of nodes) {
