@@ -82,8 +82,8 @@ export const TOKENOMICS_PARAM = /* GraphQL */ `
 // Services list (id + label) for the Services picker. The indexer returns up to 1000 rows per page; a longer
 // list is walked with `after` = the previous page's endCursor. The first page comes with the last processed height
 // (SERVICES_FIRST_PAGE), and every later page is read at that $blockHeight. The first page's rows and the height come
-// in one request, assumed (not verified) to be the same height; the walk's count check catches one that does not add
-// up.
+// in one request but not one snapshot (each field is its own READ COMMITTED statement), so they can be a block apart;
+// the walk's count check (rows == totalCount, retried once) catches one that does not add up.
 export const SERVICES_FIRST_PAGE = /* GraphQL */ `
   query servicesFirstPage {
     _metadata {
@@ -201,7 +201,7 @@ export const SUPPLIER_FLEET_SUMMARY = /* GraphQL */ `
 `;
 
 // One page of the owners' suppliers now (any status; $stakeStatuses keeps some), largest stake first, then by id, and
-// their count, in one request (whether PostGraphile reads both fields in one snapshot is not verified), all from the
+// their count, in one request but not one snapshot (each field is its own READ COMMITTED statement), all from the
 // fleet function. $after holds the keyset (the rows below the
 // previous page's last stake and id) and, for "below min stake", the stake ceiling ($ceiling). The count is the fleet's
 // own supplierCount; with a ceiling ($belowMin) the fleet row cannot apply it, so the ids under it are listed instead
