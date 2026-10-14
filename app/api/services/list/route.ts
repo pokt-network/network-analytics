@@ -6,7 +6,7 @@ export const revalidate = 43200; // 12h — the services list is very stable
 
 export async function GET() {
   return diagJson('services-list', () =>
-    unstable_cache(stamped(async () => ({ services: await getServicesList() })), ['services-list'], {
+    unstable_cache(stamped(async () => await getServicesList()), ['services-list'], {
       revalidate: 43200,
       tags: ['analytics'],
     })(),

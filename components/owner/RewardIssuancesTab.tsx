@@ -41,7 +41,8 @@ export function RewardIssuancesTab() {
     setExportNote(null);
     try {
       const { rows: all, complete } = await walkPages<Issuance>(
-        (after) => `/api/owner/issuances?addresses=${addrParam}&pageSize=${EXPORT_CHUNK}${after ? `&after=${encodeURIComponent(after)}` : ''}`,
+        (after, size) => `/api/owner/issuances?addresses=${addrParam}&pageSize=${size}${after ? `&after=${encodeURIComponent(after)}` : ''}`,
+        EXPORT_CHUNK,
         EXPORT_CAP,
         EXPORT_MAX_CALLS,
       );

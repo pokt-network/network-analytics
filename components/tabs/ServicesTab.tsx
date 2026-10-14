@@ -33,7 +33,7 @@ export function ServicesTab({
   const [volType, setVolType] = useState<ChartType>('line');
   // Top-level analytics table (range-aware suppliers + CU), and the full id/name list for the picker.
   const analytics = useTabData<{ services: ServiceAnalyticsRow[] }>(`/api/services/analytics?range=${range}`);
-  const pickerList = useTabData<{ services: ServiceItem[] }>('/api/services/list');
+  const pickerList = useTabData<{ services: ServiceItem[]; note?: string }>('/api/services/list');
   const detailUrl = svc ? `/api/services?serviceId=${encodeURIComponent(svc.id)}&range=${range}` : '';
   const { data, error } = useTabData<ServiceDetail>(detailUrl);
 
@@ -65,6 +65,7 @@ export function ServicesTab({
         />
         <div className="flex items-center gap-2.5">
           <ServicePicker onSelect={onSelectService} selectedLabel={svcLabel} items={pickerList.data?.services ?? []} />
+          {pickerList.data?.note && <p className="mt-2 text-[12px] text-text-tertiary">{pickerList.data.note}</p>}
           {svc && (
             <button
               type="button"

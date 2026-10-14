@@ -9,6 +9,8 @@ import {
   REWARDS_BY_ADDRESSES_SERVICE,
   OVERSERVICED_BY_ADDRESSES,
   SUPPLIER_SLASHES,
+  SUPPLIER_SLASHES_RANGE,
+  SUPPLIER_SLASH_TOTALS,
 } from '@/lib/queries/analytics';
 import { num, parseScalar } from './_util';
 import { unwrapRange, notCovered, fillCoverage, type CoverageRange } from './coverage';
@@ -196,16 +198,33 @@ export async function getOperatorOverserviced(addresses: string[], range: RangeK
 }
 
 // ── Slashing ──
+// The operators' suppliers the tab lists: 'now' (the Staked suppliers whose live service configs share revenue with
+// them: the old rev-share relation filter's set). 'ever' (every supplier that ever shared revenue, so also those slashed
+// and then unstaked) costs ~9 s a call for 7 addresses against ~0.6 s (mainnet, 2026-10-14), and getSupplierPenaltiesJson
+// has no scope to total it: pocketdex function needed.
+const SLASH_OPERATOR_SCOPE = 'now';
+
 interface SlashRaw {
   height: string;
   id: string;
-  actor_id: string;
-  penalty_upokt: string;
-  previous_stake_upokt: string;
-  stake_upokt: string;
-  proof_validation_status: string | null;
-  service_id: string | null;
-  application_id: string | null;
+  /** read by the totals' tail only */
+  blockTime?: string;
+  actorId: string;
+  penaltyUpokt: string;
+  previousStakeUpokt: string;
+  stakeUpokt: string;
+  proofValidationStatus: string | null;
+  serviceId: string | null;
+  applicationId: string | null;
+  coveredFrom: string | null;
+  coveredTo: string | null;
+  coveredGaps: Array<{ from: string | null; to: string | null }> | null;
+}
+
+interface SlashTotalRaw {
+  kind: string;
+  events: string | number | null;
+  slashed_upokt: string | null;
 }
 
 export interface SlashRow {
@@ -219,67 +238,152 @@ export interface SlashRow {
   applicationId: string | null;
 }
 
-export interface SlashList {
-  /** Every slashing event in the range, newest first: the view pages and the CSV exports these same rows. */
-  rows: SlashRow[];
-  /** How many, and the sum of their penalties (exact, as a decimal string), from these rows. */
+export interface SlashTotals {
+  /** Slashing events in the range and the sum of their penalties (exact, as a decimal string). */
   totalCount: number;
   penaltyUpokt: string;
+  /** True when part of the range could only be counted up to a cap: both figures are floors ("at least"). */
+  capped: boolean;
+}
+
+export interface SlashPage extends SlashTotals {
+  /** One page, newest first; more follow when hasNextPage (pass endCursor, `height:id`, as `after`). */
+  rows: SlashRow[];
+  hasNextPage: boolean;
+  endCursor: string | null;
   /** False when the indexer covers nothing of the range yet: not indexed, which is not the same as no slashing. */
   indexed: boolean;
   /** The part of the range the indexed blocks cover. */
   range: CoverageRange | null;
-  /** False when the walk stopped at its call cap with rows left: the rows are the most recent ones only. */
-  complete: boolean;
 }
 
-/** Calls of 1000 rows the walk makes at most: 20,000 slashing events in a range. */
-const SLASH_WALK_MAX_CALLS = 20;
-const SLASH_ROW_LIMIT = 1000;
+const LIFECYCLE_ROW_LIMIT = 1000;
+/** Calls a count over a stretch the settlement tables do not cover makes at most (5,000 events). */
+const UNCOVERED_MAX_CALLS = 5;
+const HOUR_MS = 3_600_000;
 
-/** Every slashing event of the operators' suppliers in a range, newest first, read in one walk (keyset on height and id,
- *  until a call comes back short), with their count and penalty sum. The caller caches the whole result. */
-export async function getOperatorSlashes(addresses: string[], range: RangeKey): Promise<SlashList> {
-  const w = rangeWindow(range);
-  const raw: SlashRaw[] = [];
-  let covered: CoverageRange | null = null;
+const slashSum = (rows: Array<Pick<SlashRaw, 'penaltyUpokt'>>) => rows.reduce((s, r) => s + BigInt(r.penaltyUpokt ?? '0'), BigInt(0));
+
+/** Slashing events in [from, to) counted from the indexed blocks (the lifecycle rows), at most UNCOVERED_MAX_CALLS calls. */
+async function countSlashes(addresses: string[], from: string, to: string): Promise<{ count: number; sum: bigint; capped: boolean }> {
+  let count = 0;
+  let sum = BigInt(0);
   let before: { beforeHeight: string; beforeId: string } | null = null;
-  let complete = false;
-  for (let calls = 0; calls < SLASH_WALK_MAX_CALLS; calls++) {
-    const data: { getActorLifecycleJson: unknown } = await gqlFetch(
+  for (let calls = 0; calls < UNCOVERED_MAX_CALLS; calls++) {
+    const data: { getActorLifecycleList: SlashRaw[] | null } = await gqlFetch(
       NETWORK,
       SUPPLIER_SLASHES,
-      { operators: addresses, start: w.startISO, end: w.endISO, rowLimit: SLASH_ROW_LIMIT, beforeHeight: before?.beforeHeight ?? null, beforeId: before?.beforeId ?? null },
-      // no per-call cache: the route caches the whole walk, one read
+      { operators: addresses, operatorScope: SLASH_OPERATOR_SCOPE, start: from, end: to, rowLimit: LIFECYCLE_ROW_LIMIT, ...before },
       { cache: 'no-store' },
     );
-    const page: { data: SlashRaw[] | null; range: CoverageRange | null } = unwrapRange<SlashRaw[]>(parseScalar(data.getActorLifecycleJson), false);
-    if (calls === 0) covered = page.range;
-    const got: SlashRaw[] = page.data ?? [];
-    raw.push(...got);
-    if (got.length < SLASH_ROW_LIMIT) {
-      complete = true;
-      break;
-    }
+    const got: SlashRaw[] = data.getActorLifecycleList ?? [];
+    count += got.length;
+    sum += slashSum(got);
+    if (got.length < LIFECYCLE_ROW_LIMIT) return { count, sum, capped: false };
     const last: SlashRaw = got[got.length - 1];
     before = { beforeHeight: last.height, beforeId: last.id };
   }
-  if (notCovered(covered)) return { rows: [], totalCount: 0, penaltyUpokt: '0', indexed: false, range: covered, complete: true };
+  return { count, sum, capped: true };
+}
+
+/** The range's slashing count and penalty sum: getSupplierPenaltiesJson for the part the settlement tables cover, plus
+ *  the slashing events (indexed blocks) of what they do not cover yet: their lag behind the window's end (the last hour
+ *  is read in the same request), and, rarely, a late start, a gap or a lag longer than an hour. The caller caches it. */
+export async function getOperatorSlashTotals(addresses: string[], range: RangeKey): Promise<SlashTotals> {
+  const w = rangeWindow(range);
+  const endMs = Date.parse(w.endISO);
+  const tailStart = new Date(Math.max(Date.parse(w.startISO), endMs - HOUR_MS)).toISOString();
+  const data = await gqlFetch<{ getSupplierPenaltiesJson: unknown; tail: Array<Pick<SlashRaw, 'blockTime' | 'penaltyUpokt'>> | null }>(
+    NETWORK,
+    SUPPLIER_SLASH_TOTALS,
+    { operators: addresses, operatorScope: SLASH_OPERATOR_SCOPE, start: w.startISO, end: w.endISO, tailStart },
+    { cache: 'no-store' },
+  );
+  const t = unwrapRange<SlashTotalRaw[]>(parseScalar(data.getSupplierPenaltiesJson), false);
+  // nothing covered: the whole window from the indexed blocks
+  if (!t.range || notCovered(t.range)) {
+    const all = await countSlashes(addresses, w.startISO, w.endISO);
+    return { totalCount: all.count, penaltyUpokt: all.sum.toString(), capped: all.capped };
+  }
+  // one row per reason (PROOF_MISSING, PROOF_INVALID)
+  const slashed = (t.data ?? []).filter((r) => r.kind === 'slashed');
+  let count = slashed.reduce((s, r) => s + num(r.events), 0);
+  let sum = slashed.reduce((s, r) => s + BigInt(r.slashed_upokt ?? '0'), BigInt(0));
+  let capped = false;
+  const coveredTo = Date.parse(t.range.covered_to ?? w.endISO);
+  // the uncovered stretches: a late start, the gaps, the end past covered_to
+  const uncovered: Array<[number, number]> = [];
+  const coveredFrom = Date.parse(t.range.covered_from ?? w.startISO);
+  if (coveredFrom > Date.parse(w.startISO)) uncovered.push([Date.parse(w.startISO), coveredFrom]);
+  for (const g of t.range.gaps ?? []) uncovered.push([Date.parse(g.from ?? w.startISO), Date.parse(g.to ?? w.endISO)]);
+  if (coveredTo < endMs) uncovered.push([coveredTo, endMs]);
+  const tailFrom = Date.parse(tailStart);
+  const tail = data.tail ?? [];
+  for (const [a, b] of uncovered) {
+    if (a >= b) continue;
+    if (a >= tailFrom && tail.length < LIFECYCLE_ROW_LIMIT) {
+      // inside the last hour, already read
+      const rows = tail.filter((r) => Date.parse(r.blockTime ?? '') >= a && Date.parse(r.blockTime ?? '') < b);
+      count += rows.length;
+      sum += slashSum(rows);
+    } else {
+      const more = await countSlashes(addresses, new Date(a).toISOString(), new Date(b).toISOString());
+      count += more.count;
+      sum += more.sum;
+      capped ||= more.capped;
+    }
+  }
+  return { totalCount: count, penaltyUpokt: sum.toString(), capped };
+}
+
+/** One page of the operators' suppliers' slashing events in a range, newest first: the first page, or the rows after
+ *  `after` (the endCursor of the page before, `height:id`). */
+export async function getOperatorSlashPage(
+  addresses: string[],
+  range: RangeKey,
+  pageSize: number,
+  after: string | null,
+): Promise<Omit<SlashPage, keyof SlashTotals>> {
+  const w = rangeWindow(range);
+  const cut = after ? after.indexOf(':') : -1;
+  // one row past the page tells whether another page follows
+  const rowLimit = Math.min(pageSize + 1, LIFECYCLE_ROW_LIMIT);
+  const vars = { operators: addresses, operatorScope: SLASH_OPERATOR_SCOPE, start: w.startISO, end: w.endISO };
+  const data = await gqlFetch<{ getActorLifecycleList: SlashRaw[] | null }>(
+    NETWORK,
+    SUPPLIER_SLASHES,
+    {
+      operators: addresses,
+      operatorScope: SLASH_OPERATOR_SCOPE,
+      start: w.startISO,
+      end: w.endISO,
+      rowLimit,
+      beforeHeight: cut > 0 ? after!.slice(0, cut) : null,
+      beforeId: cut > 0 ? after!.slice(cut + 1) : null,
+    },
+    { revalidate: 300 },
+  );
+  const all = data.getActorLifecycleList ?? [];
+  // the covered part of the window: on every row; a page with no rows asks for it on its own
+  const covered: CoverageRange | null = all.length
+    ? { requested_from: w.startISO, requested_to: w.endISO, covered_from: all[0].coveredFrom, covered_to: all[0].coveredTo, gaps: all[0].coveredGaps ?? [], end_inclusive: false }
+    : unwrapRange<unknown>(parseScalar((await gqlFetch<{ getActorLifecycleJson: unknown }>(NETWORK, SUPPLIER_SLASHES_RANGE, vars, { revalidate: 300 })).getActorLifecycleJson), false).range;
+  const nodes = all.slice(0, pageSize);
+  const last = nodes[nodes.length - 1];
   return {
-    totalCount: raw.length,
-    penaltyUpokt: raw.reduce((s, r) => s + BigInt(r.penalty_upokt ?? '0'), BigInt(0)).toString(),
-    indexed: true,
+    indexed: !notCovered(covered),
     range: covered,
-    complete,
-    rows: raw.map((n) => ({
-      supplier: n.actor_id,
+    hasNextPage: all.length === rowLimit,
+    endCursor: last ? `${last.height}:${last.id}` : null,
+    rows: nodes.map((n) => ({
+      supplier: n.actorId,
       block: num(n.height),
-      penaltyUpokt: num(n.penalty_upokt),
-      prevStakeUpokt: num(n.previous_stake_upokt),
-      afterStakeUpokt: num(n.stake_upokt),
-      proofStatus: n.proof_validation_status,
-      serviceId: n.service_id,
-      applicationId: n.application_id,
+      penaltyUpokt: num(n.penaltyUpokt),
+      prevStakeUpokt: num(n.previousStakeUpokt),
+      afterStakeUpokt: num(n.stakeUpokt),
+      proofStatus: n.proofValidationStatus,
+      serviceId: n.serviceId,
+      applicationId: n.applicationId,
     })),
   };
 }

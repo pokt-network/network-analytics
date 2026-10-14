@@ -8,6 +8,7 @@ import {
   REWARDS_BY_ADDRESS_DATE,
   REWARDS_BY_DATE_GROUPED,
   OWNER_CLAIMS,
+  OWNER_CLAIMS_RANGE,
   OWNER_SETTLED_CLAIMS,
   SUPPLIER_OWNERS,
 } from '@/lib/queries/analytics';
@@ -150,13 +151,16 @@ export async function getOwnerSuppliers(
 
 interface ClaimRaw {
   height: string;
-  event_idx: string;
-  service_id: string;
+  eventIdx: number;
+  serviceId: string;
   relays: string;
-  settled_upokt: string;
-  relay_minted_upokt: string;
-  supplier_id: string;
-  supplier_owner_id: string | null;
+  settledUpokt: string;
+  relayMintedUpokt: string;
+  supplierId: string;
+  supplierOwnerId: string | null;
+  coveredFrom: string | null;
+  coveredTo: string | null;
+  coveredGaps: Array<{ from: string | null; to: string | null }> | null;
 }
 
 export interface Issuance {
@@ -166,8 +170,9 @@ export interface Issuance {
   operator: string;
   /** Owner of that supplier as the settlement recorded it, or its current owner where the settlement recorded none. */
   owner: string;
-  /** 'settlement': the owner the settlement recorded; 'current': the supplier's owner now (the settlement has none). */
-  ownerAsOf: 'settlement' | 'current';
+  /** 'settlement': the owner the settlement recorded; 'current': the supplier's owner now (the settlement has none);
+   *  'unknown': neither could be read (owner is '—'). */
+  ownerAsOf: 'settlement' | 'current' | 'unknown';
   relays: number;
   settledUpokt: number;
   mintedUpokt: number;
@@ -190,30 +195,33 @@ export async function getOwnerIssuances(addresses: string[], pageSize = 25, afte
   // one row past the page tells whether another page follows; the catalog returns at most 1000 rows a call, so a page
   // of 1000 that comes back full may be followed by an empty one
   const rowLimit = Math.min(pageSize + 1, 1000);
-  const data = await gqlFetch<{ getClaimsJson: unknown }>(
+  const data = await gqlFetch<{ getClaimsList: ClaimRaw[] | null }>(
     NETWORK,
     OWNER_CLAIMS,
     { owners: addresses, rowLimit, beforeHeight, beforeEventIdx: beforeEventIdx == null ? null : Number(beforeEventIdx) },
     { revalidate: 30 },
   );
-  const { data: claims, range } = unwrapRange<ClaimRaw[]>(parseScalar(data.getClaimsJson), false);
-  const all = claims ?? [];
+  const all = data.getClaimsList ?? [];
+  // the covered part of the history: on every row; an answer with no rows asks for it on its own
+  const range: CoverageRange | null = all.length
+    ? { requested_from: null, requested_to: null, covered_from: all[0].coveredFrom, covered_to: all[0].coveredTo, gaps: all[0].coveredGaps ?? [], end_inclusive: false }
+    : unwrapRange<unknown>(parseScalar((await gqlFetch<{ getClaimsJson: unknown }>(NETWORK, OWNER_CLAIMS_RANGE, { owners: addresses }, { revalidate: 30 })).getClaimsJson), false).range;
   const page = all.slice(0, pageSize);
   const last = page[page.length - 1];
-  const current = await currentOwners([...new Set(page.filter((n) => !n.supplier_owner_id).map((n) => n.supplier_id))]);
+  const current = await currentOwners([...new Set(page.filter((n) => !n.supplierOwnerId).map((n) => n.supplierId))]);
   return {
     range,
-    endCursor: last ? `${last.height}:${last.event_idx}` : null,
+    endCursor: last ? `${last.height}:${last.eventIdx}` : null,
     hasNextPage: all.length === rowLimit,
     rows: page.map((n) => {
-      const settled = num(n.settled_upokt);
-      const minted = num(n.relay_minted_upokt);
+      const settled = num(n.settledUpokt);
+      const minted = num(n.relayMintedUpokt);
       return {
         block: num(n.height),
-        serviceId: n.service_id,
-        operator: n.supplier_id,
-        owner: n.supplier_owner_id || current.get(n.supplier_id)!,
-        ownerAsOf: n.supplier_owner_id ? 'settlement' : 'current',
+        serviceId: n.serviceId,
+        operator: n.supplierId,
+        owner: n.supplierOwnerId || current.get(n.supplierId) || '—',
+        ownerAsOf: n.supplierOwnerId ? 'settlement' : current.get(n.supplierId) ? 'current' : 'unknown',
         relays: num(n.relays),
         settledUpokt: settled,
         mintedUpokt: minted,
@@ -224,17 +232,22 @@ export async function getOwnerIssuances(addresses: string[], pageSize = 25, afte
 }
 
 /** The current owner of each supplier (a flat lookup by id), for the settlements that recorded none (211 rows on
- *  mainnet, all at heights 461433-689253). Every supplier that settled exists, so a missing one is an error. */
+ *  mainnet, all at heights 461433-689253). A supplier it cannot find, or a failed lookup, leaves only that cell unknown. */
 async function currentOwners(ids: string[]): Promise<Map<string, string>> {
   if (ids.length === 0) return new Map();
-  const data = await gqlFetch<{ suppliers: { nodes: Array<{ id: string; ownerId: string }> } | null }>(
-    NETWORK,
-    SUPPLIER_OWNERS,
-    { ids, first: ids.length },
-    { revalidate: 1800 },
-  );
-  const owners = new Map((data.suppliers?.nodes ?? []).map((n) => [n.id, n.ownerId]));
-  const missing = ids.filter((id) => !owners.get(id));
-  if (missing.length) throw new Error(`issuances: no current owner for ${missing.length} of ${ids.length} suppliers`);
-  return owners;
+  try {
+    const data = await gqlFetch<{ suppliers: { nodes: Array<{ id: string; ownerId: string }> } | null }>(
+      NETWORK,
+      SUPPLIER_OWNERS,
+      { ids, first: ids.length },
+      { revalidate: 1800 },
+    );
+    const owners = new Map((data.suppliers?.nodes ?? []).map((n) => [n.id, n.ownerId]));
+    const missing = ids.filter((id) => !owners.get(id));
+    if (missing.length) console.warn(`issuances: no current owner for ${missing.length} of ${ids.length} suppliers`);
+    return owners;
+  } catch (e) {
+    console.warn(`issuances: current owner lookup failed: ${(e as Error).message}`);
+    return new Map();
+  }
 }

@@ -1,26 +1,42 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { unstable_cache } from 'next/cache';
-import { getOperatorSlashes, type SlashList } from '@/lib/data/operator';
+import { getOperatorSlashPage, getOperatorSlashTotals, type SlashPage } from '@/lib/data/operator';
 import { ADDRESS_RE } from '@/lib/staking/addresses';
 import { DEFAULT_RANGE, isRangeKey, OWNER_ADDRESS_CAP, type RangeKey } from '@/lib/app-config';
+
+const PAGE_SIZE = 25;
+// the indexer's getActorLifecycleJson returns at most 1000 rows a call, and each page reads one row more to tell whether
+// another follows
+const MAX_PAGE_SIZE = 999;
+// endCursor of a page: the last row's height and id
+const CURSOR_RE = /^\d+:.+$/;
 
 function parseAddrs(param: string | null): string[] {
   if (!param) return [];
   return param.split(',').map((s) => s.trim()).filter((a) => ADDRESS_RE.test(a)).slice(0, OWNER_ADDRESS_CAP);
 }
 
-// Every slashing event of the range in one answer, cached whole (one read): the view pages these rows and the CSV
-// exports them, so the page count, Next and the export all come from the same rows.
+// One page of slashing events (keyset) and the range's totals. The totals are computed once per range and cached
+// (small), each page is its own small cached read.
 export async function GET(req: NextRequest) {
   const addresses = parseAddrs(req.nextUrl.searchParams.get('addresses'));
+  const reqSize = Number(req.nextUrl.searchParams.get('pageSize'));
+  const pageSize = Number.isFinite(reqSize) && reqSize > 0 ? Math.min(Math.floor(reqSize), MAX_PAGE_SIZE) : PAGE_SIZE;
   const rangeParam = req.nextUrl.searchParams.get('range');
   const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
+  // after=<endCursor of the previous page> reads the rows that follow it; without it, the first page. An after that is
+  // present but empty or malformed is an error, never read as the first page.
+  const after = req.nextUrl.searchParams.get('after');
+  if (after !== null && !CURSOR_RE.test(after)) return NextResponse.json({ error: 'invalid after cursor' }, { status: 400 });
 
   if (addresses.length === 0) {
-    return NextResponse.json({ rows: [], totalCount: 0, penaltyUpokt: '0', indexed: true, range: null, complete: true } satisfies SlashList);
+    return NextResponse.json({
+      rows: [], hasNextPage: false, endCursor: null, indexed: true, range: null, totalCount: 0, penaltyUpokt: '0', capped: false,
+    } satisfies SlashPage);
   }
-  const list = await unstable_cache(() => getOperatorSlashes(addresses, range), ['operator-slashing', addresses.join(','), range], {
-    revalidate: 300,
-  })();
-  return NextResponse.json(list);
+  const [totals, page] = await Promise.all([
+    unstable_cache(() => getOperatorSlashTotals(addresses, range), ['operator-slash-totals', addresses.join(','), range], { revalidate: 300 })(),
+    getOperatorSlashPage(addresses, range, pageSize, after),
+  ]);
+  return NextResponse.json({ ...page, ...totals } satisfies SlashPage);
 }

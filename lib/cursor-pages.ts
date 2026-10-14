@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTabData } from './use-tab-data';
 
 // Prev/Next paging over a route that pages by keyset: each page after the first reads the rows after the endCursor of
@@ -9,6 +9,7 @@ import { useTabData } from './use-tab-data';
 interface CursorPage {
   hasNextPage?: boolean;
   endCursor?: string | null;
+  rows?: unknown[];
 }
 
 /**
@@ -32,6 +33,13 @@ export function useCursorPages<T extends CursorPage>(baseUrl: string, resetKey: 
   const d = useTabData<T>(url, opts);
   const current = !!url && d.url === url && !d.loading;
   const nextCursor = current && d.data?.hasNextPage ? (d.data.endCursor ?? null) : null;
+  // a revalidation can shrink the list under a page (rows unstaked, a filter's set changed): an empty page past the
+  // first steps back to the last page that has rows
+  const emptyPast = current && page > 1 && (d.data?.rows?.length ?? 0) === 0;
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (emptyPast) setPage((p) => Math.max(1, p - 1));
+  }, [emptyPast]);
   return {
     data: d.data,
     loading: d.loading,
@@ -48,15 +56,21 @@ export function useCursorPages<T extends CursorPage>(baseUrl: string, resetKey: 
 }
 
 /**
- * Every row of a keyset route from its first page, stepping by the rows and cursor each page returns, at most `cap` rows
- * and `maxCalls` calls. `complete` is false when it stopped at a cap with rows left. A failed call, or a page that says
+ * Every row of a keyset route from its first page, `chunk` rows a call, stepping by the rows and cursor each page
+ * returns, at most `cap` rows and `maxCalls` calls. `complete` is false when it stopped at a cap with rows left. A failed call, or a page that says
  * more follow without a cursor, throws.
  */
-export async function walkPages<R>(pageUrl: (after: string | null) => string, cap: number, maxCalls: number): Promise<{ rows: R[]; complete: boolean }> {
+export async function walkPages<R>(
+  pageUrl: (after: string | null, size: number) => string,
+  chunk: number,
+  cap: number,
+  maxCalls: number,
+): Promise<{ rows: R[]; complete: boolean }> {
   const rows: R[] = [];
   let after: string | null = null;
   for (let calls = 0; calls < maxCalls && rows.length < cap; calls++) {
-    const res = await fetch(pageUrl(after));
+    // the last call asks only for what the cap still needs
+    const res = await fetch(pageUrl(after, Math.min(chunk, cap - rows.length)));
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = (await res.json()) as CursorPage & { rows: R[] };
     rows.push(...data.rows);

@@ -89,9 +89,10 @@ export const LAST_PROCESSED_HEIGHT = /* GraphQL */ `
 `;
 
 // Services list (id + label) for the Services picker. The indexer returns up to 1000 rows per page; a longer
-// list is walked with `after` = the previous page's endCursor, every page at the same $blockHeight (one snapshot).
+// list is walked with `after` = the previous page's endCursor, every page at the same $blockHeight (one snapshot; left
+// out for a list that fits one page).
 export const SERVICES_LIST = /* GraphQL */ `
-  query servicesList($after: Cursor, $blockHeight: String!) {
+  query servicesList($after: Cursor, $blockHeight: String) {
     services(first: 1000, orderBy: ID_ASC, after: $after, blockHeight: $blockHeight) {
       totalCount
       pageInfo {
@@ -134,14 +135,15 @@ export const REWARDS_BY_DATE_GROUPED = /* GraphQL */ `
 `;
 
 // Settled claims of the suppliers the owners own now, newest first (by height, then event_idx), over the whole
-// history, from the settlement catalog: {range, data}, range = the part of the history the settlement tables cover
-// (they can lag the indexed blocks). At most $rowLimit rows (up to 1000); the next page passes the last row's height
-// and event_idx as $beforeHeight / $beforeEventIdx, a keyset: a settlement indexed meanwhile cannot shift the rows as it
-// does with OFFSET. supplier_id is the operator (node) address — the useful per-row identity across a fleet;
-// supplier_owner_id is the owner the settlement recorded. Numbers come as strings.
+// history, from the settlement catalog: only the fields the tab and the CSV use, and on every row the part of the
+// history the settlement tables cover (coveredFrom / coveredTo / coveredGaps; they can lag the indexed blocks). At most
+// $rowLimit rows (up to 1000); the next page passes the last row's height and eventIdx as $beforeHeight /
+// $beforeEventIdx, a keyset: a settlement indexed meanwhile cannot shift the rows as it does with OFFSET. supplierId is
+// the operator (node) address — the useful per-row identity across a fleet; supplierOwnerId is the owner the settlement
+// recorded.
 export const OWNER_CLAIMS = /* GraphQL */ `
   query ownerClaims($owners: [String], $rowLimit: Int, $beforeHeight: BigInt, $beforeEventIdx: Int) {
-    getClaimsJson(
+    getClaimsList(
       suppliers: null
       rangeStart: null
       rangeEnd: null
@@ -150,7 +152,27 @@ export const OWNER_CLAIMS = /* GraphQL */ `
       rowLimit: $rowLimit
       beforeHeight: $beforeHeight
       beforeEventIdx: $beforeEventIdx
-    )
+    ) {
+      height
+      eventIdx
+      serviceId
+      relays
+      settledUpokt
+      relayMintedUpokt
+      supplierId
+      supplierOwnerId
+      coveredFrom
+      coveredTo
+      coveredGaps
+    }
+  }
+`;
+
+// The part of the history the settlement tables cover, for an answer with no rows (which carries none): one row at
+// most of getClaimsJson, read for its range.
+export const OWNER_CLAIMS_RANGE = /* GraphQL */ `
+  query ownerClaimsRange($owners: [String]) {
+    getClaimsJson(suppliers: null, rangeStart: null, rangeEnd: null, owners: $owners, statuses: ["settled"], rowLimit: 1)
   }
 `;
 
@@ -167,11 +189,19 @@ export const SUPPLIER_FLEET_SUMMARY = /* GraphQL */ `
 `;
 
 // One page of the owners' suppliers now (any status; $stakeStatuses keeps some), largest stake first, then by id, and
-// their count, in one request (one snapshot). $after holds the keyset (the rows below the previous page's last stake
-// and id) and, for "below min stake", the stake ceiling. The count is the suppliers list's totalCount under the same
-// own-column filter ($countFilter). serviceCount is the number of services the supplier has a live config for.
+// their count, in one request (one snapshot), all from the fleet function. $after holds the keyset (the rows below the
+// previous page's last stake and id) and, for "below min stake", the stake ceiling ($ceiling). The count is the fleet's
+// own supplierCount; with a ceiling ($belowMin) the fleet row cannot apply it, so the ids under it are listed instead
+// (up to 1001: more is reported as capped). serviceCount is the number of services the supplier has a live config for.
 export const OWNER_SUPPLIERS = /* GraphQL */ `
-  query ownerSuppliers($owners: [String], $stakeStatuses: [String], $first: Int, $after: GetSupplierFleetRecordFilter, $countFilter: SupplierFilter!) {
+  query ownerSuppliers(
+    $owners: [String]
+    $stakeStatuses: [String]
+    $first: Int
+    $after: GetSupplierFleetRecordFilter
+    $belowMin: Boolean!
+    $ceiling: GetSupplierFleetRecordFilter
+  ) {
     rows: getSupplierFleetList(owners: $owners, stakeStatuses: $stakeStatuses, first: $first, filter: $after) {
       supplierId
       ownerId
@@ -179,8 +209,11 @@ export const OWNER_SUPPLIERS = /* GraphQL */ `
       stakeStatus
       serviceCount
     }
-    count: suppliers(filter: $countFilter) {
-      totalCount
+    count: getSupplierFleetList(owners: $owners, stakeStatuses: $stakeStatuses, bySupplier: false) @skip(if: $belowMin) {
+      supplierCount
+    }
+    under: getSupplierFleetList(owners: $owners, stakeStatuses: $stakeStatuses, filter: $ceiling, first: 1001) @include(if: $belowMin) {
+      supplierId
     }
   }
 `;
@@ -260,22 +293,83 @@ export const SUPPLIER_MIN_STAKE = /* GraphQL */ `
   }
 `;
 
-// Slashing events of the operators' suppliers in [start, end), newest first (by height, then id): {range, data}, range =
-// the part of the window the indexed blocks cover. At most $rowLimit rows (up to 1000); the next call passes the last
-// row's height and id as $beforeHeight / $beforeId. stake_upokt is the stake after the slash; proof_validation_status
-// can be null. Numbers come as strings.
+// One page of slashing events of the operators' suppliers in [start, end), newest first (by height, then id): only the
+// fields the tab uses, and on every row the part of the window the indexed blocks cover. At most $rowLimit rows; the
+// next page passes the last row's height and id as $beforeHeight / $beforeId. stakeUpokt is the stake after the slash;
+// proofValidationStatus can be null.
 export const SUPPLIER_SLASHES = /* GraphQL */ `
-  query supplierSlashes($operators: [String], $start: Datetime, $end: Datetime, $rowLimit: Int, $beforeHeight: BigInt, $beforeId: String) {
+  query supplierSlashes(
+    $operators: [String]
+    $operatorScope: String
+    $start: Datetime
+    $end: Datetime
+    $rowLimit: Int
+    $beforeHeight: BigInt
+    $beforeId: String
+  ) {
+    getActorLifecycleList(
+      kind: "supplier"
+      addresses: null
+      rangeStart: $start
+      rangeEnd: $end
+      operators: $operators
+      operatorScope: $operatorScope
+      events: ["slash"]
+      rowLimit: $rowLimit
+      beforeHeight: $beforeHeight
+      beforeId: $beforeId
+    ) {
+      height
+      id
+      actorId
+      penaltyUpokt
+      previousStakeUpokt
+      stakeUpokt
+      proofValidationStatus
+      serviceId
+      applicationId
+      coveredFrom
+      coveredTo
+      coveredGaps
+    }
+  }
+`;
+
+// The part of the window the indexed blocks cover, for a page with no rows (which carries none): one row at most of
+// getActorLifecycleJson, read for its range.
+export const SUPPLIER_SLASHES_RANGE = /* GraphQL */ `
+  query supplierSlashesRange($operators: [String], $operatorScope: String, $start: Datetime, $end: Datetime) {
     getActorLifecycleJson(
       kind: "supplier"
       addresses: null
       rangeStart: $start
       rangeEnd: $end
       operators: $operators
+      operatorScope: $operatorScope
       events: ["slash"]
-      rowLimit: $rowLimit
-      beforeHeight: $beforeHeight
-      beforeId: $beforeId
+      rowLimit: 1
     )
+  }
+`;
+
+// The range's slashing totals in one request: getSupplierPenaltiesJson (the settlement tables; rows of kind 'slashed',
+// one per reason, with events and slashed_upokt) for the part they cover, and the slashing events of the window's last
+// hour ($tailStart..$end), which the caller counts past the settlement tables' covered_to (they trail the indexed blocks).
+export const SUPPLIER_SLASH_TOTALS = /* GraphQL */ `
+  query supplierSlashTotals($operators: [String], $operatorScope: String, $start: Datetime!, $end: Datetime!, $tailStart: Datetime) {
+    getSupplierPenaltiesJson(suppliers: null, rangeStart: $start, rangeEnd: $end, bySupplier: false, operators: $operators)
+    tail: getActorLifecycleList(
+      kind: "supplier"
+      addresses: null
+      rangeStart: $tailStart
+      rangeEnd: $end
+      operators: $operators
+      operatorScope: $operatorScope
+      events: ["slash"]
+      rowLimit: 1000
+    ) {
+      blockTime
+      penaltyUpokt
+    }
   }
 `;

@@ -29,6 +29,8 @@ export interface SupplierRow {
 export interface SupplierListPage {
   rows: SupplierRow[];
   totalCount: number;
+  /** totalCount is a floor: the count stopped at its cap. */
+  totalCapped?: boolean;
   /** More rows follow this page; pass endCursor as `after` to read them. */
   hasNextPage?: boolean;
   endCursor?: string | null;
@@ -81,22 +83,30 @@ export async function fetchOwnerSuppliers(
   revalidate = 1800,
 ): Promise<SupplierListPage> {
   const stakeStatuses = filter === 'all' ? null : filter === 'unstaking' ? ['Unstaking'] : filter === 'unstaked' ? ['Unstaked'] : ['Staked'];
-  const conds = [keysetFilter(after), filter === 'below_min' ? { stakeUpokt: { lessThanOrEqualTo: String(minStakeUpokt) } } : null].filter(
-    (c): c is Record<string, unknown> => c !== null,
-  );
-  const data = await gqlFetch<{ rows: FleetRowRaw[] | null; count: { totalCount: number } | null }>(
+  const belowMin = filter === 'below_min';
+  // "below min stake" = Staked and at or under the current minimum (the slash-risk nodes)
+  const ceiling = belowMin ? { stakeUpokt: { lessThanOrEqualTo: String(minStakeUpokt) } } : null;
+  const conds = [keysetFilter(after), ceiling].filter((c): c is Record<string, unknown> => c !== null);
+  const data = await gqlFetch<{
+    rows: FleetRowRaw[] | null;
+    count?: Array<{ supplierCount: string | number }> | null;
+    under?: Array<{ supplierId: string }> | null;
+  }>(
     NETWORK,
     OWNER_SUPPLIERS,
     {
       owners,
       stakeStatuses,
       first: pageSize + 1,
-      countFilter: { ownerId: { in: owners }, ...statusClause(filter, minStakeUpokt) },
+      belowMin,
+      ...(ceiling ? { ceiling } : {}),
       ...(conds.length ? { after: conds.length === 1 ? conds[0] : { and: conds } } : {}),
     },
     { revalidate },
   );
-  return toPage(data.rows ?? [], pageSize, data.count?.totalCount ?? 0);
+  const under = data.under?.length ?? 0;
+  const page = toPage(data.rows ?? [], pageSize, belowMin ? Math.min(under, 1000) : num(data.count?.[0]?.supplierCount));
+  return belowMin && under > 1000 ? { ...page, totalCapped: true } : page;
 }
 
 /** One page of the Staked suppliers that share revenue with the operators now, and their count: the first page, or the
@@ -162,23 +172,5 @@ export async function getMinStakeUpokt(): Promise<number> {
     return num((parsed as { amount?: string | number }).amount);
   } catch {
     return 0;
-  }
-}
-
-/** The SupplierFilter clause for a stake-status filter. `below_min` needs the current min stake
- *  (fetched by the caller) and means "Staked but at or under the minimum" — slash-risk nodes. */
-export function statusClause(filter: StakeFilter, minStakeUpokt: number): Record<string, unknown> {
-  switch (filter) {
-    case 'staked':
-      return { stakeStatus: { equalTo: 'Staked' } };
-    case 'unstaking':
-      return { stakeStatus: { equalTo: 'Unstaking' } };
-    case 'unstaked':
-      return { stakeStatus: { equalTo: 'Unstaked' } };
-    case 'below_min':
-      return { stakeStatus: { equalTo: 'Staked' }, stakeAmount: { lessThanOrEqualTo: String(minStakeUpokt) } };
-    case 'all':
-    default:
-      return {};
   }
 }
