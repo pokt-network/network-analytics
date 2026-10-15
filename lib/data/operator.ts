@@ -312,9 +312,8 @@ export async function getOperatorSlashTotals(addresses: string[], range: RangeKe
   // `now`: the instant the window ends at (the caller's cache key holds the same one)
   const w = rangeWindow(range, now);
   // every time in µs: covered_to is a block's time + 1 µs, which milliseconds would round onto the block (counted twice)
-  const us = (iso: string | null | undefined) => toMicros(iso);
-  const start = us(w.startISO)!;
-  const end = us(w.endISO)!;
+  const start = toMicros(w.startISO)!;
+  const end = toMicros(w.endISO)!;
   const hourUs = BigInt(HOUR_MS) * BigInt(1000);
   const tailFrom = end - hourUs > start ? end - hourUs : start;
   const data = await gqlFetch<{ getSupplierPenaltiesJson: unknown; tail: unknown }>(
@@ -328,12 +327,12 @@ export async function getOperatorSlashTotals(addresses: string[], range: RangeKe
   const tailRows = (tailPage.data ?? []).map(fromJson);
   let capped = tailRows.length >= LIFECYCLE_ROW_LIMIT;
   // the indexed blocks themselves trail the window's end: what is past them is not counted anywhere
-  const indexedTo = us(tailPage.range?.covered_to);
+  const indexedTo = toMicros(tailPage.range?.covered_to);
   if (tailPage.range && (indexedTo === null || indexedTo < end - BigInt(INDEX_LAG_SLACK_MS) * BigInt(1000))) capped = true;
   // events with their time; one without a time cannot be placed in or out of a stretch: dropped, and the totals say
   // "at least"
   const timed = (rows: SlashRaw[]) => {
-    const placed = rows.map((r) => ({ ...r, t: us(r.blockTime) })).filter((r): r is SlashRaw & { t: bigint } => r.t !== null);
+    const placed = rows.map((r) => ({ ...r, t: toMicros(r.blockTime) })).filter((r): r is SlashRaw & { t: bigint } => r.t !== null);
     if (placed.length < rows.length) {
       console.warn(`slashing totals: ${rows.length - placed.length} events without a block time, left out`);
       capped = true;

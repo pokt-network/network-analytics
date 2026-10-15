@@ -70,3 +70,18 @@ test('toMicros reads a space separator, keeps an epoch number to the ms, and ref
   assert.equal(u('Oct 1, 2026 23:00:00.5 UTC'), null);
   assert.equal(u(null), null);
 });
+
+test('a space-separated time with no zone is UTC, whatever the server time zone', () => {
+  const tz = process.env.TZ;
+  process.env.TZ = 'America/Santo_Domingo'; // UTC-4: Date reads '2026-10-01 23:00:00' 4 h later
+  try {
+    assert.equal(u('2026-10-01 23:00:00'), u('2026-10-01T23:00:00Z'));
+    assert.equal(u('2026-10-01 23:00:00.123456'), u('2026-10-01T23:00:00.123456Z'));
+    assert.equal(u('2026-10-01T23:00:00'), u('2026-10-01T23:00:00Z'));
+    assert.equal(u('2026-10-01 19:00:00-04:00'), u('2026-10-01T23:00:00Z'));
+    assert.equal(u('2026-10-01 23:00:00+0000'), u('2026-10-01T23:00:00Z'));
+  } finally {
+    if (tz === undefined) delete process.env.TZ;
+    else process.env.TZ = tz;
+  }
+});

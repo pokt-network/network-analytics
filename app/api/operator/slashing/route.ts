@@ -41,10 +41,11 @@ export async function GET(req: NextRequest) {
   // both keys carry the window's 60 s bucket (slashCacheKeys), and the functions read that same window
   const keys = slashCacheKeys(addresses, range, { after, pageSize, lookahead });
   const [totals, page] = await Promise.all([
-    unstable_cache(() => getOperatorSlashTotals(addresses, range, keys.now), keys.totals, { revalidate: 300 })(),
-    // the validated page is what is cached (5 min): an answer with `errors` or one that fails to process throws and is
+    // 60 s: the key changes with the window's 60 s bucket, so a longer TTL would never be reached
+    unstable_cache(() => getOperatorSlashTotals(addresses, range, keys.now), keys.totals, { revalidate: 60 })(),
+    // the validated page is what is cached (60 s): an answer with `errors` or one that fails to process throws and is
     // not kept (the reads use no fetch cache)
-    unstable_cache(() => getOperatorSlashPage(addresses, range, pageSize, after, lookahead, keys.now), keys.page, { revalidate: 300 })(),
+    unstable_cache(() => getOperatorSlashPage(addresses, range, pageSize, after, lookahead, keys.now), keys.page, { revalidate: 60 })(),
   ]);
   return NextResponse.json({ ...page, ...totals } satisfies SlashPage);
 }

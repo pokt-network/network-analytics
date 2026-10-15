@@ -54,3 +54,22 @@ test('walkPages at the cap on a full page reads 1 row past the last cursor to kn
     globalThis.fetch = realFetch;
   }
 });
+
+test('a failed probe at the cap keeps the rows read, as not known to be complete', async () => {
+  const { walkPages } = await import('../lib/cursor-pages.ts');
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const size = Number(new URL(url, 'http://x').searchParams.get('size'));
+    if (size === 1) return new Response('{}', { status: 502 });
+    const after = Number(new URL(url, 'http://x').searchParams.get('after') ?? 0);
+    const rows = Array.from({ length: size }, (_, i) => after + i);
+    return new Response(JSON.stringify({ rows, hasNextPage: true, endCursor: String(after + size) }), { status: 200 });
+  };
+  try {
+    const walk = await walkPages((after, size) => `/x?size=${size}${after ? `&after=${after}` : ''}`, 1000, 5000, 6, true);
+    assert.equal(walk.rows.length, 5000);
+    assert.equal(walk.complete, false);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

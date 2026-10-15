@@ -49,7 +49,7 @@ export function RewardIssuancesTab() {
       const rows = all.slice(0, EXPORT_CAP);
       // A walk that stops at the cap on a full page cannot tell whether older settlements exist (no lookahead row, to
       // stay at 5 requests as before), so it claims neither "all" nor "capped"; a short page ends it as all of them.
-      const readAll = complete && all.length <= EXPORT_CAP;
+      const readAll = complete;
       // Owner = the supplier's owner now (Owner As Of says so: 'current'; 'settlement' or 'unknown' where it could not be
       // read); Owner At Settlement = the owner the settlement recorded (empty for a few old rows)
       const headers = ['Block', 'Service', 'Operator', 'Owner', 'Owner As Of', 'Owner At Settlement', 'Relays', 'Settled (POKT)', 'Minted (POKT)', 'Mint Ratio'];
@@ -67,7 +67,7 @@ export function RewardIssuancesTab() {
       ]);
       downloadCsv(csvFilename('reward-issuances'), toCsv(headers, body));
       setExportNote(
-        readAll ? `Exported all ${formatNumber(rows.length)} settlements.` : `Exported the ${formatNumber(rows.length)} most recent settlements.`,
+        readAll ? `Exported all ${formatNumber(rows.length)} settlements.` : `Exported the ${formatNumber(rows.length)} most recent settlements; older ones may exist.`,
       );
     } catch {
       setExportNote('Export failed — please try again.');

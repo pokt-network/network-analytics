@@ -71,7 +71,7 @@ export function SlashingTab() {
       ]);
       downloadCsv(csvFilename('operator-slashing'), toCsv(headers, body));
       setExportNote(
-        complete && all.length <= EXPORT_CAP
+        complete
           ? `Exported all ${formatNumber(rows.length)} slashing events.`
           : `Exported the ${formatNumber(rows.length)} most recent of ${atLeast}${formatNumber(totalCount)} slashing events — the export is capped for performance.`,
       );

@@ -68,15 +68,25 @@ function parse(range: CoverageRange) {
  *  it is missing or unparseable. */
 export function toMicros(input: string | number | null | undefined): bigint | null {
   if (input == null || input === '') return null;
-  const d = toDate(input);
-  if (!d) return null;
   // epoch numbers (toDate's ms or s): exact to the millisecond
-  if (typeof input === 'number' || /^\d+$/.test(input)) return BigInt(d.getTime()) * BigInt(1000);
-  const m = input.match(/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.(\d+))?/);
-  // a fraction the pattern cannot place is not truncated into a wrong instant
-  if (!m) return /\.\d/.test(input) ? null : BigInt(d.getTime()) * BigInt(1000);
-  const frac = (m[1] ?? '').padEnd(6, '0').slice(0, 6);
-  return BigInt(Math.floor(d.getTime() / 1000)) * BigInt(1_000_000) + BigInt(frac);
+  if (typeof input === 'number' || /^\d+$/.test(input)) {
+    const d = toDate(input);
+    return d ? BigInt(d.getTime()) * BigInt(1000) : null;
+  }
+  // date and time with `T` or a space, an optional fraction and an optional zone; no zone is UTC, as the indexer writes
+  // it (read here, not by Date, which takes a space-separated form without a zone as local time)
+  const m = input.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:(Z)|([+-])(\d{2})(?::?(\d{2}))?)?$/i);
+  if (!m) {
+    // a fraction the pattern cannot place is not truncated into a wrong instant; other forms (a bare date) as toDate
+    if (/\.\d/.test(input)) return null;
+    const d = toDate(input);
+    return d ? BigInt(d.getTime()) * BigInt(1000) : null;
+  }
+  const [, y, mo, da, h, mi, se, fr, , sign, oh, om] = m;
+  const offsetSeconds = sign ? (sign === '-' ? -1 : 1) * (Number(oh) * 3600 + Number(om ?? 0) * 60) : 0;
+  const seconds = Date.UTC(Number(y), Number(mo) - 1, Number(da), Number(h), Number(mi), Number(se)) / 1000 - offsetSeconds;
+  if (!Number.isFinite(seconds)) return null;
+  return BigInt(seconds) * BigInt(1_000_000) + BigInt((fr ?? '').padEnd(6, '0').slice(0, 6));
 }
 
 /** Microseconds since the epoch as an ISO timestamp that keeps them (`…:16.796001Z`). */

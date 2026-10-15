@@ -127,10 +127,14 @@ export async function walkPages<R>(
     after = data.endCursor;
   }
   if (probeAtCap && rows.length >= cap && after) {
-    const res = await fetch(pageUrl(after, 1));
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const next = (await res.json()) as { rows: R[] };
-    return { rows, complete: next.rows.length === 0 };
+    // a failed probe keeps the rows read: the walk is then just not known to be complete
+    try {
+      const res = await fetch(pageUrl(after, 1));
+      if (res.ok) return { rows, complete: ((await res.json()) as { rows: R[] }).rows.length === 0 };
+    } catch {
+      /* the rows stand; completeness unknown */
+    }
+    return { rows, complete: false };
   }
   return { rows, complete: false };
 }
