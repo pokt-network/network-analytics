@@ -3,12 +3,16 @@
 // Managed by scripts/sync-vendor.mjs. Edit upstream in the explorer repo, then re-sync.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// DIVERGES from pnf-explorer feat/closed-schema 4107d66 in one place: reads in flight OUTSIDE a React render (this app's
-// route handlers, which are all dynamic) share one process-wide map (`inflightReads`). pnf-explorer shares only within a
-// render, where a joiner would not register its revalidate on a prerendered route; here every gqlFetch call runs in a
-// dynamic route handler, where React's `cache` gives a new map on every call, so nothing would be shared. Measured in
-// the built app, 3 identical cold requests at once: one upstream request per distinct read with this map, three without
-// it (as many as the old fetch cache made). Kept here only; a re-sync from pnf-explorer drops it.
+// DIVERGES from pnf-explorer feat/closed-schema 4107d66 in two places. First: reads in flight OUTSIDE a React render
+// (this app's route handlers, which are all dynamic) share one process-wide map (`inflightReads`). pnf-explorer shares
+// only within a render, where a joiner would not register its revalidate on a prerendered route; here every gqlFetch
+// call runs in a dynamic route handler, where React's `cache` gives a new map on every call, so nothing would be
+// shared. Measured in the built app, 3 identical cold requests at once: one upstream request per distinct read with
+// this map, three without it (as many as the old fetch cache made). Second: a cached answer read more than its
+// revalidate ago is returned at once and read again after the response (`refreshAfter`), where unstable_cache's own
+// background read would hold a route handler's response until it finished. Its entries carry when they were read (key
+// part 'read-at'). Both are kept here only; a re-sync from pnf-explorer would drop them, so scripts/sync-vendor.mjs
+// leaves this file alone.
 
 import { cache } from 'react';
 import { getNetwork, type NetworkId } from './networks';
@@ -90,16 +94,38 @@ async function cachedRead<T>(network: NetworkId, query: string, variables: Recor
     const held = await heldPartial<T>(unstable_cache, network, query, variables);
     if (held !== undefined) return held;
   }
-  const cached = unstable_cache(
-    async (n: NetworkId, q: string, v: Record<string, unknown> | null) =>
-      complete(await postGraphql<T>(n, q, v ?? undefined, 'no-store', opts.signal), opts.partial),
-    // The policy is part of the key. Next judges an entry's age by the revalidate of the call that reads it, so an entry
-    // shared across policies would let a 15 s answer (a block not written yet) be fresh for good to a `false` reader.
-    ['gqlFetch', String(opts.revalidate)],
-    { revalidate: opts.revalidate },
-  );
+  // The request's abort signal, dropped by a refresh that runs after the response (the request may be gone by then).
+  let signal = opts.signal;
+  const read = async (n: NetworkId, q: string, v: Record<string, unknown> | null): Promise<ReadAnswer<T>> => ({
+    readAt: Date.now(),
+    data: complete(await postGraphql<T>(n, q, v ?? undefined, 'no-store', signal), opts.partial),
+  });
+  // One entry per read and policy; `revalidate` only decides whether unstable_cache sees the entry stale.
+  const entry = (revalidate: RevalidateOpt) =>
+    unstable_cache(
+      read,
+      // The policy is part of the key. Next judges an entry's age by the revalidate of the call that reads it, so an
+      // entry shared across policies would let a 15 s answer (a block not written yet) be fresh for good to a `false`
+      // reader. 'read-at': the entry carries when it was read (this app's stale path, below).
+      ['gqlFetch', 'read-at', String(opts.revalidate)],
+      { revalidate },
+    )(network, query, variables ?? null);
   try {
-    return await cached(network, query, variables ?? null);
+    if (opts.revalidate === false) return (await entry(false)).data;
+    const ttl = opts.revalidate as number;
+    // Read as never stale, and judge the age here: a stale answer is returned at once and read again after the response.
+    // unstable_cache's own background read would hold a route handler's response until it finished.
+    const got = await entry(ONE_YEAR_S);
+    if (Date.now() - got.readAt <= ttl * 1000) return got.data;
+    const id = JSON.stringify([network, query, variables ?? null, ttl]);
+    // The entry was read more than one TTL ago, so a read at half the TTL sees it stale and reads it again in the
+    // background, which Next awaits after the callbacks; stored with that half TTL as its own revalidate.
+    const scheduled = await refreshAfter(id, async () => {
+      signal = undefined;
+      await entry(Math.max(1, Math.floor(ttl / 2)));
+    });
+    // outside a request there is no after(): unstable_cache's own rule, which reads it again before answering there
+    return scheduled ? got.data : (await entry(ttl)).data;
   } catch (e) {
     // A partial answer reaches its caller, and is held only for the rest of its window.
     if (e instanceof PartialAnswer) return (await heldPartial<T>(unstable_cache, network, query, variables, e.data as T)) ?? (e.data as T);
@@ -107,6 +133,28 @@ async function cachedRead<T>(network: NetworkId, query: string, variables: Recor
       return settle(await postGraphql<T>(network, query, variables, 'no-store', opts.signal), opts.partial);
     }
     throw e;
+  }
+}
+
+/** A cached answer and when (ms) it was read from the indexer. */
+type ReadAnswer<T> = { readAt: number; data: T };
+
+const ONE_YEAR_S = 31_536_000;
+
+/** Reads this process is refreshing: a stale answer is read again once, however many requests return it meanwhile. */
+const refreshing = new Set<string>();
+
+/** Runs `refresh` after the response (once per `id` at a time); false when there is no request to run it after. */
+async function refreshAfter(id: string, refresh: () => Promise<void>): Promise<boolean> {
+  if (refreshing.has(id)) return true;
+  const { after } = await import('next/server');
+  refreshing.add(id);
+  try {
+    after(() => refresh().finally(() => refreshing.delete(id)));
+    return true;
+  } catch {
+    refreshing.delete(id);
+    return false;
   }
 }
 
