@@ -1,9 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { unstable_cache } from 'next/cache';
-import { getOperatorSlashPage, getOperatorSlashTotals, type SlashPage } from '@/lib/data/operator';
+import { getOperatorSlashPage, getOperatorSlashTotals, slashCacheKeys, type SlashPage } from '@/lib/data/operator';
 import { ADDRESS_RE } from '@/lib/staking/addresses';
 import { DEFAULT_RANGE, isRangeKey, OWNER_ADDRESS_CAP, type RangeKey } from '@/lib/app-config';
-import { rangeWindow } from '@/lib/timeranges';
 
 const PAGE_SIZE = 25;
 // the indexer returns at most 1000 rows a call. A pager page reads one row more to tell whether another follows, so it
@@ -39,21 +38,13 @@ export async function GET(req: NextRequest) {
       rows: [], hasNextPage: false, endCursor: null, indexed: true, range: null, totalCount: 0, penaltyUpokt: '0', capped: false,
     } satisfies SlashPage);
   }
-  // the window, in its 60 s bucket, is part of both keys: a route serves a stale entry as it is, so a key with the range
-  // name alone would answer an old window after a quiet stretch. The functions read the same window.
-  const end = rangeWindow(range).endISO;
-  const now = Date.parse(end);
+  // both keys carry the window's 60 s bucket (slashCacheKeys), and the functions read that same window
+  const keys = slashCacheKeys(addresses, range, { after, pageSize, lookahead });
   const [totals, page] = await Promise.all([
-    unstable_cache(() => getOperatorSlashTotals(addresses, range, now), ['operator-slash-totals', addresses.join(','), range, end], {
-      revalidate: 300,
-    })(),
+    unstable_cache(() => getOperatorSlashTotals(addresses, range, keys.now), keys.totals, { revalidate: 300 })(),
     // the validated page is what is cached (5 min): an answer with `errors` or one that fails to process throws and is
     // not kept (the reads use no fetch cache)
-    unstable_cache(
-      () => getOperatorSlashPage(addresses, range, pageSize, after, lookahead, now),
-      ['operator-slash-page', addresses.join(','), range, end, after ?? '', String(pageSize), lookahead ? 'pager' : 'export'],
-      { revalidate: 300 },
-    )(),
+    unstable_cache(() => getOperatorSlashPage(addresses, range, pageSize, after, lookahead, keys.now), keys.page, { revalidate: 300 })(),
   ]);
   return NextResponse.json({ ...page, ...totals } satisfies SlashPage);
 }

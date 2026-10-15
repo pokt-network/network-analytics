@@ -374,6 +374,24 @@ export async function getOperatorSlashTotals(addresses: string[], range: RangeKe
   return { totalCount: count, penaltyUpokt: sum.toString(), capped };
 }
 
+/** The slashing route's cache keys and the instant its window ends at. The window, in its 60 s bucket
+ *  (rangeWindow's end), is part of both keys: a route serves a stale entry as it is, so keys with the range name alone
+ *  would answer an old window after a quiet stretch. The page and totals functions read the window of that same `now`. */
+export function slashCacheKeys(
+  addresses: string[],
+  range: RangeKey,
+  page: { after: string | null; pageSize: number; lookahead: boolean },
+  at: number = Date.now(),
+): { now: number; totals: string[]; page: string[] } {
+  const end = rangeWindow(range, at).endISO;
+  const ops = addresses.join(',');
+  return {
+    now: Date.parse(end),
+    totals: ['operator-slash-totals', ops, range, end],
+    page: ['operator-slash-page', ops, range, end, page.after ?? '', String(page.pageSize), page.lookahead ? 'pager' : 'export'],
+  };
+}
+
 /** One page of the operators' suppliers' slashing events in a range, newest first: the first page, or the rows after
  *  `after` (the endCursor of the page before, `height:id`). The pager (`lookahead`, one row past the page) reads the JSON
  *  twin, whose coverage comes even with no rows, so a page is one request; the export reads the list with only the
