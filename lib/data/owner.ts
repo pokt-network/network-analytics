@@ -191,12 +191,18 @@ export interface IssuancePage {
 }
 
 /** One page of settlements, newest first: the first page, or the rows after `after` (the endCursor of the page before,
- *  `height:eventIdx`). */
-export async function getOwnerIssuances(addresses: string[], pageSize = 25, after: string | null = null): Promise<IssuancePage> {
+ *  `height:eventIdx`). `lookahead` (the pager) reads one row past the page to tell whether another follows; without it
+ *  (the export walk) a full page says another may follow and a short one ends the walk, so 1000-row pages need no extra
+ *  call. */
+export async function getOwnerIssuances(
+  addresses: string[],
+  pageSize = 25,
+  after: string | null = null,
+  lookahead = true,
+): Promise<IssuancePage> {
   const [beforeHeight, beforeEventIdx] = after ? after.split(':') : [null, null];
-  // one row past the page tells whether another page follows; the catalog returns at most 1000 rows a call, so a page
-  // of 1000 that comes back full may be followed by an empty one
-  const rowLimit = Math.min(pageSize + 1, 1000);
+  // the catalog returns at most 1000 rows a call
+  const rowLimit = Math.min(lookahead ? pageSize + 1 : pageSize, 1000);
   const data = await gqlFetch<{ getClaimsList: ClaimRaw[] | null }>(
     NETWORK,
     OWNER_CLAIMS,

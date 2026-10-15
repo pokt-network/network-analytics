@@ -11,11 +11,11 @@ import { formatNumber, formatPokt, truncate } from '@/lib/format';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { notCovered, rangeNote } from '@/lib/data/coverage';
 
-// CSV export walks the indexer 999 rows at a time (the route's page cap), each page after the previous one's
-// cursor (a keyset on height+event index, so rows don't shift between pages). A single owner can have ~1M+
-// settlements, so cap the export at the most-recent N — ~5 chunked requests.
+// CSV export walks the indexer 1000 rows at a time (its query limit) with no lookahead row, each page after the previous
+// one's cursor (a keyset on height+event index, so rows don't shift between pages), until a short page or the cap. A
+// single owner can have ~1M+ settlements, so cap the export at the most-recent N — 5 requests, as before.
 const EXPORT_CAP = 5000;
-const EXPORT_CHUNK = 999; // the route's largest page
+const EXPORT_CHUNK = 1000; // the route's largest export page (lookahead=0)
 const EXPORT_MAX_CALLS = Math.ceil(EXPORT_CAP / EXPORT_CHUNK) + 1;
 
 // Settlement-event history across the owner's fleet (the suppliers the owners own now). Paged by
@@ -41,7 +41,7 @@ export function RewardIssuancesTab() {
     setExportNote(null);
     try {
       const { rows: all, complete } = await walkPages<Issuance>(
-        (after, size) => `/api/owner/issuances?addresses=${addrParam}&pageSize=${size}${after ? `&after=${encodeURIComponent(after)}` : ''}`,
+        (after, size) => `/api/owner/issuances?addresses=${addrParam}&lookahead=0&pageSize=${size}${after ? `&after=${encodeURIComponent(after)}` : ''}`,
         EXPORT_CHUNK,
         EXPORT_CAP,
         EXPORT_MAX_CALLS,
