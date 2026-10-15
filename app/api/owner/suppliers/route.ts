@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { unstable_cache } from 'next/cache';
 import { getOwnerSuppliers } from '@/lib/data/owner';
-import { type SupplierListPage, isStakeFilter, type StakeFilter } from '@/lib/data/suppliers-list';
+import { type SupplierListPage, getMinStakeUpokt, isStakeFilter, type StakeFilter } from '@/lib/data/suppliers-list';
 import { ADDRESS_RE } from '@/lib/staking/addresses';
 import { OWNER_ADDRESS_CAP } from '@/lib/app-config';
 
@@ -28,10 +28,15 @@ export async function GET(req: NextRequest) {
   if (afterParam !== null && !CURSOR_RE.test(afterParam)) return NextResponse.json({ error: 'invalid after cursor' }, { status: 400 });
 
   if (addresses.length === 0) return NextResponse.json({ rows: [], totalCount: 0 } satisfies SupplierListPage);
-  // the processed page is what is cached (30 min): a page that fails to process throws and is not kept
+  // the processed page is what is cached (30 min): a page that fails to process throws and is not kept. The min stake
+  // is read here, outside that cache (inside it Next forces no-store), so its own 6 h fetch cache holds; it is part of
+  // the key, so a governance change starts a new entry.
   const after = afterParam || null;
-  const page = await unstable_cache(() => getOwnerSuppliers(addresses, filter, after, pageSize), ['owner-suppliers', addresses.join(','), filter, after ?? '', String(pageSize)], {
-    revalidate: 1800,
-  })();
+  const minStake = filter === 'below_min' ? await getMinStakeUpokt() : 0;
+  const page = await unstable_cache(
+    () => getOwnerSuppliers(addresses, filter, after, pageSize, minStake),
+    ['owner-suppliers', addresses.join(','), filter, after ?? '', String(pageSize), String(minStake)],
+    { revalidate: 1800 },
+  )();
   return NextResponse.json(page);
 }

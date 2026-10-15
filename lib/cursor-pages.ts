@@ -123,3 +123,13 @@ export async function walkPages<R>(
   }
   return { rows, complete: false };
 }
+
+/**
+ * Whether an export walk read every row. walkPages says so when a page came back short; a walk that stopped at the cap
+ * on a full page with no lookahead row cannot tell, but a known count can: `total` rows read is all of them (unless the
+ * count is a floor, `totalIsFloor`).
+ */
+export function exportIsComplete(walkComplete: boolean, read: number, cap: number, total?: number, totalIsFloor = false): boolean {
+  if (walkComplete && read <= cap) return true;
+  return typeof total === 'number' && !totalIsFloor && Math.min(read, cap) === total;
+}

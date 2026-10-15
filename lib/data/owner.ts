@@ -143,8 +143,11 @@ export async function getOwnerSuppliers(
   filter: StakeFilter,
   after: string | null,
   pageSize = 25,
+  minStakeUpokt?: number,
 ): Promise<SupplierListPage> {
-  const minStake = filter === 'below_min' ? await getMinStakeUpokt() : 0;
+  // the caller may read the min stake itself (the route does, outside its result cache, where the param's own 6 h fetch
+  // cache applies)
+  const minStake = filter !== 'below_min' ? 0 : (minStakeUpokt ?? (await getMinStakeUpokt()));
   return fetchOwnerSuppliers(addresses, filter, minStake, after, pageSize);
 }
 
@@ -220,7 +223,8 @@ export async function getOwnerIssuances(
   let all: ClaimListRaw[];
   if (lookahead) {
     // the pager: the JSON twin, whose range comes even with no rows (one request a page)
-    const data = await gqlFetch<{ getClaimsJson: unknown }>(NETWORK, OWNER_CLAIMS_PAGE, vars, { revalidate: 30 });
+    // no fetch cache (it would keep a 200 that carries `errors`): the route caches the validated page
+    const data = await gqlFetch<{ getClaimsJson: unknown }>(NETWORK, OWNER_CLAIMS_PAGE, vars, { cache: 'no-store' });
     const page = unwrapRange<ClaimJsonRaw[]>(parseScalar(data.getClaimsJson), false);
     range = page.range;
     all = (page.data ?? []).map((n) => ({
@@ -236,7 +240,7 @@ export async function getOwnerIssuances(
     }));
   } else {
     // the export: the list with only the fields it writes
-    all = (await gqlFetch<{ getClaimsList: ClaimListRaw[] | null }>(NETWORK, OWNER_CLAIMS, vars, { revalidate: 30 })).getClaimsList ?? [];
+    all = (await gqlFetch<{ getClaimsList: ClaimListRaw[] | null }>(NETWORK, OWNER_CLAIMS, vars, { cache: 'no-store' })).getClaimsList ?? [];
   }
   const page = all.slice(0, pageSize);
   const last = page[page.length - 1];

@@ -13,7 +13,7 @@ import {
   SUPPLIER_SLASH_TOTALS,
 } from '@/lib/queries/analytics';
 import { num, parseScalar } from './_util';
-import { unwrapRange, notCovered, uncoveredSpans, fillCoverage, type CoverageRange } from './coverage';
+import { unwrapRange, notCovered, uncoveredSpansMicros, toMicros, microsToIso, fillCoverage, type CoverageRange } from './coverage';
 import { getRewardsWindow } from './owner';
 import { fetchFleetSummary, fetchOperatorSuppliers, type SupplierListPage } from './suppliers-list';
 
@@ -310,14 +310,16 @@ async function slashesIn(addresses: string[], from: string, to: string): Promise
  *  window's end by more than a few blocks. The caller caches it. */
 export async function getOperatorSlashTotals(addresses: string[], range: RangeKey): Promise<SlashTotals> {
   const w = rangeWindow(range);
-  const ms = (iso: string | null | undefined) => toDate(iso)?.getTime() ?? NaN;
-  const startMs = ms(w.startISO);
-  const endMs = ms(w.endISO);
-  const tailFrom = Math.max(startMs, endMs - HOUR_MS);
+  // every time in µs: covered_to is a block's time + 1 µs, which milliseconds would round onto the block (counted twice)
+  const us = (iso: string | null | undefined) => toMicros(iso);
+  const start = us(w.startISO)!;
+  const end = us(w.endISO)!;
+  const hourUs = BigInt(HOUR_MS) * BigInt(1000);
+  const tailFrom = end - hourUs > start ? end - hourUs : start;
   const data = await gqlFetch<{ getSupplierPenaltiesJson: unknown; tail: unknown }>(
     NETWORK,
     SUPPLIER_SLASH_TOTALS,
-    { operators: addresses, operatorScope: SLASH_OPERATOR_SCOPE, start: w.startISO, end: w.endISO, tailStart: new Date(tailFrom).toISOString() },
+    { operators: addresses, operatorScope: SLASH_OPERATOR_SCOPE, start: w.startISO, end: w.endISO, tailStart: microsToIso(tailFrom) },
     { cache: 'no-store' },
   );
   const t = unwrapRange<SlashTotalRaw[]>(parseScalar(data.getSupplierPenaltiesJson), false);
@@ -325,12 +327,12 @@ export async function getOperatorSlashTotals(addresses: string[], range: RangeKe
   const tailRows = (tailPage.data ?? []).map(fromJson);
   let capped = tailRows.length >= LIFECYCLE_ROW_LIMIT;
   // the indexed blocks themselves trail the window's end: what is past them is not counted anywhere
-  const indexedTo = ms(tailPage.range?.covered_to);
-  if (tailPage.range && (!Number.isFinite(indexedTo) || indexedTo < endMs - INDEX_LAG_SLACK_MS)) capped = true;
+  const indexedTo = us(tailPage.range?.covered_to);
+  if (tailPage.range && (indexedTo === null || indexedTo < end - BigInt(INDEX_LAG_SLACK_MS) * BigInt(1000))) capped = true;
   // events with their time; one without a time cannot be placed in or out of a stretch: dropped, and the totals say
   // "at least"
   const timed = (rows: SlashRaw[]) => {
-    const placed = rows.map((r) => ({ ...r, t: ms(r.blockTime) })).filter((r) => Number.isFinite(r.t));
+    const placed = rows.map((r) => ({ ...r, t: us(r.blockTime) })).filter((r): r is SlashRaw & { t: bigint } => r.t !== null);
     if (placed.length < rows.length) {
       console.warn(`slashing totals: ${rows.length - placed.length} events without a block time, left out`);
       capped = true;
@@ -341,7 +343,7 @@ export async function getOperatorSlashTotals(addresses: string[], range: RangeKe
   // each uncovered one once (coverage.ts: a late start, the gaps, the end past covered_to). An indexer that sends no
   // range leaves its totals as they are.
   const covered = !(t.range && notCovered(t.range));
-  const spans: Array<[number, number]> = !t.range ? [] : covered ? uncoveredSpans(t.range) : [[startMs, endMs]];
+  const spans: Array<[bigint, bigint]> = !t.range ? [] : covered ? uncoveredSpansMicros(t.range) : [[start, end]];
   let count = 0;
   let sum = BigInt(0);
   if (covered) {
@@ -350,11 +352,18 @@ export async function getOperatorSlashTotals(addresses: string[], range: RangeKe
     count = slashed.reduce((s, r) => s + num(r.events), 0);
     sum = slashed.reduce((s, r) => s + BigInt(r.slashed_upokt ?? '0'), BigInt(0));
   }
-  // the events to place: the last hour (already read) and, for stretches before it, one more read from the earliest
+  // the events to place: the last hour (already read) and, for the stretches before it, one more read over exactly
+  // their extent before the last hour (from the earliest start to the latest end, cut at the last hour), so its 1000
+  // rows are not spent on the covered stretch after them
   const early = spans.filter(([a]) => a < tailFrom);
   let events = timed(tailRows);
   if (early.length) {
-    const more = await slashesIn(addresses, new Date(Math.min(...early.map(([a]) => a))).toISOString(), new Date(tailFrom).toISOString());
+    const from = early.reduce((m, [a]) => (a < m ? a : m), early[0][0]);
+    const to = early.reduce((m, [, b]) => {
+      const cut = b < tailFrom ? b : tailFrom;
+      return cut > m ? cut : m;
+    }, from);
+    const more = await slashesIn(addresses, microsToIso(from), microsToIso(to));
     capped ||= more.capped;
     events = events.concat(timed(more.rows));
   }
@@ -391,12 +400,13 @@ export async function getOperatorSlashPage(
   let covered: CoverageRange | null = null;
   let all: SlashRaw[];
   if (lookahead) {
-    const data = await gqlFetch<{ getActorLifecycleJson: unknown }>(NETWORK, SUPPLIER_SLASH_PAGE, vars, { revalidate: 300 });
+    // no fetch cache (it would keep a 200 that carries `errors`): the route caches the validated page
+    const data = await gqlFetch<{ getActorLifecycleJson: unknown }>(NETWORK, SUPPLIER_SLASH_PAGE, vars, { cache: 'no-store' });
     const page = unwrapRange<SlashJsonRaw[]>(parseScalar(data.getActorLifecycleJson), false);
     covered = page.range;
     all = (page.data ?? []).map(fromJson);
   } else {
-    all = (await gqlFetch<{ getActorLifecycleList: SlashRaw[] | null }>(NETWORK, SUPPLIER_SLASHES, vars, { revalidate: 300 })).getActorLifecycleList ?? [];
+    all = (await gqlFetch<{ getActorLifecycleList: SlashRaw[] | null }>(NETWORK, SUPPLIER_SLASHES, vars, { cache: 'no-store' })).getActorLifecycleList ?? [];
   }
   const nodes = all.slice(0, pageSize);
   const last = nodes[nodes.length - 1];

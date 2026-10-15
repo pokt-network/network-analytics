@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { unstable_cache } from 'next/cache';
 import { getOwnerIssuances, type IssuancePage } from '@/lib/data/owner';
 import { ADDRESS_RE } from '@/lib/staking/addresses';
 import { OWNER_ADDRESS_CAP } from '@/lib/app-config';
@@ -36,6 +37,12 @@ export async function GET(req: NextRequest) {
   if (addresses.length === 0) {
     return NextResponse.json({ rows: [], hasNextPage: false } satisfies IssuancePage);
   }
-  const result = await getOwnerIssuances(addresses, pageSize, after, lookahead);
+  // the validated page is what is cached (30 s): an answer with `errors` or one that fails to process throws and is
+  // not kept (the reads use no fetch cache)
+  const result = await unstable_cache(
+    () => getOwnerIssuances(addresses, pageSize, after, lookahead),
+    ['owner-issuances', addresses.join(','), after ?? '', String(pageSize), lookahead ? 'pager' : 'export'],
+    { revalidate: 30 },
+  )();
   return NextResponse.json(result);
 }

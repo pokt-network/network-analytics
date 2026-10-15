@@ -63,17 +63,56 @@ function parse(range: CoverageRange) {
   return { ...t, from, to, gaps };
 }
 
+/** An indexer timestamp as microseconds since the epoch, exactly. The indexer's covered_to is a block's time + 1 µs, and
+ *  a millisecond Date rounds that back onto the block itself, so comparisons against it are made here in µs. Null when
+ *  it is missing or unparseable. */
+export function toMicros(iso: string | null | undefined): bigint | null {
+  const d = toDate(iso ?? null);
+  if (!d || !iso) return null;
+  const frac = (iso.match(/T\d{2}:\d{2}:\d{2}\.(\d+)/)?.[1] ?? '').padEnd(6, '0').slice(0, 6);
+  return BigInt(Math.floor(d.getTime() / 1000)) * BigInt(1_000_000) + BigInt(frac);
+}
+
+/** Microseconds since the epoch as an ISO timestamp that keeps them (`…:16.796001Z`). */
+export function microsToIso(us: bigint): string {
+  const s = us / BigInt(1_000_000);
+  return `${new Date(Number(s) * 1000).toISOString().slice(0, 19)}.${(us % BigInt(1_000_000)).toString().padStart(6, '0')}Z`;
+}
+
 /**
- * The parts of the requested window the answer does not cover, as half-open [from, to) in milliseconds, each once: a late
+ * The parts of the requested window the answer does not cover, in microseconds, each once, half-open [from, to): a late
  * start, the gaps (clipped to the covered span and merged, as parse() does), and the end past covered_to. Empty when the
- * range is fully covered; for a range with nothing covered use notCovered() first.
+ * range is fully covered; for a range with nothing covered use notCovered() first. Microseconds, because covered_to is
+ * the closing block's time + 1 µs: rows are counted against it exactly.
  */
-export function uncoveredSpans(range: CoverageRange): Array<[number, number]> {
-  const p = parse(range);
-  const spans: Array<[number, number]> = [];
-  if (Number.isFinite(p.requestedFrom) && p.from > p.requestedFrom) spans.push([p.requestedFrom, p.from]);
-  spans.push(...p.gaps);
-  if (Number.isFinite(p.requestedTo) && p.to < p.requestedTo) spans.push([p.to, p.requestedTo]);
+export function uncoveredSpansMicros(range: CoverageRange): Array<[bigint, bigint]> {
+  const inc = range.end_inclusive ? BigInt(1) : BigInt(0);
+  const plus = (v: bigint | null) => (v === null ? null : v + inc);
+  const rf = toMicros(range.requested_from);
+  const rt = plus(toMicros(range.requested_to));
+  const cf = toMicros(range.covered_from);
+  const ct = plus(toMicros(range.covered_to));
+  const max = (a: bigint | null, b: bigint | null) => (a === null ? b : b === null ? a : a > b ? a : b);
+  const min = (a: bigint | null, b: bigint | null) => (a === null ? b : b === null ? a : a < b ? a : b);
+  const lo = max(cf, rf);
+  const hi = min(ct, rt);
+  const gaps: Array<[bigint, bigint]> = [];
+  for (const g of range.gaps ?? []) {
+    const a = max(g.from === null ? lo : toMicros(g.from), lo);
+    const b = min(g.to === null ? hi : toMicros(g.to), hi);
+    if (a !== null && b !== null && a < b) gaps.push([a, b]);
+  }
+  gaps.sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
+  const merged: Array<[bigint, bigint]> = [];
+  for (const [a, b] of gaps) {
+    const prev = merged[merged.length - 1];
+    if (prev && a <= prev[1]) prev[1] = b > prev[1] ? b : prev[1];
+    else merged.push([a, b]);
+  }
+  const spans: Array<[bigint, bigint]> = [];
+  if (rf !== null && lo !== null && lo > rf) spans.push([rf, lo]);
+  spans.push(...merged);
+  if (rt !== null && hi !== null && hi < rt) spans.push([hi, rt]);
   return spans.filter(([a, b]) => a < b);
 }
 

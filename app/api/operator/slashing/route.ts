@@ -39,7 +39,13 @@ export async function GET(req: NextRequest) {
   }
   const [totals, page] = await Promise.all([
     unstable_cache(() => getOperatorSlashTotals(addresses, range), ['operator-slash-totals', addresses.join(','), range], { revalidate: 300 })(),
-    getOperatorSlashPage(addresses, range, pageSize, after, lookahead),
+    // the validated page is what is cached (5 min): an answer with `errors` or one that fails to process throws and is
+    // not kept (the reads use no fetch cache)
+    unstable_cache(
+      () => getOperatorSlashPage(addresses, range, pageSize, after, lookahead),
+      ['operator-slash-page', addresses.join(','), range, after ?? '', String(pageSize), lookahead ? 'pager' : 'export'],
+      { revalidate: 300 },
+    )(),
   ]);
   return NextResponse.json({ ...page, ...totals } satisfies SlashPage);
 }

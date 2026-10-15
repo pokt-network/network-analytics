@@ -26,3 +26,15 @@ test('a page missing in the record (a hole) is not counted as walked', () => {
   shown[1] = ['b'];
   assert.deepEqual(walkCheck(shown, 3, ['c'], false, 5), { repeats: 0, missed: 0 });
 });
+
+test('an export that stops at the cap on a full page is complete when the count says so', async () => {
+  const { exportIsComplete } = await import('../lib/cursor-pages.ts');
+  // exactly 5000 slashes, read as 5 full pages of 1000: the walk cannot tell, the count can
+  assert.equal(exportIsComplete(false, 5000, 5000, 5000), true);
+  // more than the cap: capped
+  assert.equal(exportIsComplete(false, 5000, 5000, 5001), false);
+  // a count that is a floor ("at least") cannot vouch for it
+  assert.equal(exportIsComplete(false, 5000, 5000, 5000, true), false);
+  // a walk that ended on a short page is complete whatever the count
+  assert.equal(exportIsComplete(true, 1446, 5000, 1450), true);
+});

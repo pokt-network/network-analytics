@@ -5,7 +5,7 @@ import { IconReceipt, IconDownload } from '@tabler/icons-react';
 import { EXPLORER_BASE_URL } from '@/lib/app-config';
 import { UPOKT_PER_POKT } from '@/lib/config';
 import { useStakingTool } from '@/components/staking/StakingToolContext';
-import { useCursorPages, walkPages } from '@/lib/cursor-pages';
+import { exportIsComplete, useCursorPages, walkPages } from '@/lib/cursor-pages';
 import type { SlashPage, SlashRow } from '@/lib/data/operator';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { ChartSkeleton, EmptyState } from '@/components/ui/states';
@@ -69,7 +69,9 @@ export function SlashingTab() {
       ]);
       downloadCsv(csvFilename('operator-slashing'), toCsv(headers, body));
       setExportNote(
-        complete && all.length <= EXPORT_CAP
+        // with no lookahead row a walk that stops at the cap on a full page cannot tell whether more follow; the range's
+        // count (when it is not a floor) can: exactly the cap is complete
+        exportIsComplete(complete, all.length, EXPORT_CAP, totalCount, !!d.data?.capped)
           ? `Exported all ${formatNumber(rows.length)} slashing events.`
           : `Exported the ${formatNumber(rows.length)} most recent of ${atLeast}${formatNumber(totalCount)} slashing events — the export is capped for performance.`,
       );
