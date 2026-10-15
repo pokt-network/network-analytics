@@ -36,11 +36,35 @@ interface CacheEntry {
 let settledHeight: number | null = null;
 const settledListeners = new Set<() => void>();
 
-/** Set by LiveStrip from each heartbeat. */
+/** Set by LiveStrip from each heartbeat. Only forward: a lower height (an instance behind) would make panels bounce. */
 export function setSettledHeight(height: number | null): void {
-  if (height == null || height === settledHeight) return;
+  if (height == null || (settledHeight != null && height <= settledHeight)) return;
   settledHeight = height;
   for (const l of settledListeners) l();
+}
+
+/** The settlement height known now (null before the first heartbeat). */
+export function currentSettledHeight(): number | null {
+  return settledHeight;
+}
+
+/** A cached entry, read only (tests, diagnostics). */
+export function cachedEntry(url: string): Readonly<CacheEntry> | undefined {
+  return cache.get(url);
+}
+
+/**
+ * Whether a cached entry is read again: by age (60 s), or for data that changes only at settlements (`bySettlement`)
+ * when the heartbeat's settlement has moved past the one it was fetched under; by age as well while no settlement is
+ * known, or for a response that also carries per-block fields (`alsoByAge`).
+ */
+export function needsRefetch(
+  entry: Pick<CacheEntry, 'ts' | 'settled'>,
+  o: { bySettlement: boolean; alsoByAge?: boolean; settled: number | null },
+): boolean {
+  const old = Date.now() - entry.ts > STALE_MS;
+  if (!o.bySettlement || o.settled == null || entry.settled == null) return old;
+  return entry.settled < o.settled || (o.alsoByAge === true && old);
 }
 
 function subscribeSettled(listener: () => void): () => void {
@@ -59,6 +83,8 @@ const STALE_MS = 60_000;
 function fetchShared(url: string): Promise<unknown> {
   const existing = inflight.get(url);
   if (existing) return existing;
+  // the settlement the answer belongs to is the one known when the request starts
+  const settledAtStart = settledHeight;
 
   const p = fetch(url)
     .then(async (r) => {
@@ -69,7 +95,7 @@ function fetchShared(url: string): Promise<unknown> {
       }
       const cacheState = (r.headers.get('x-cache') as CacheState) ?? null;
       const json = await r.json();
-      cache.set(url, { ts: Date.now(), data: json, cache: cacheState, settled: settledHeight });
+      cache.set(url, { ts: Date.now(), data: json, cache: cacheState, settled: settledAtStart });
       return json;
     })
     .finally(() => {
@@ -131,13 +157,17 @@ function maybePrefetchSiblings(url: string): void {
  * Serves cached data instantly on revisit, keeps prior data visible during a cold fetch (cleared if it fails), and reports
  * visible fetches to the global loading store so the shell can indicate activity.
  */
-export function useTabData<T>(url: string, opts: { prefetchSiblings?: boolean; settled?: boolean } = {}): State<T> {
+export function useTabData<T>(
+  url: string,
+  opts: { prefetchSiblings?: boolean; settled?: boolean; alsoByAge?: boolean } = {},
+): State<T> {
   // Sibling-range prefetch keeps range toggles instant, but it fires a request per RANGE_KEY. For
   // heavy endpoints (the operator tool's per-event resolvers, seconds each — and some ranges the
   // indexer can't compute at all), that's wasteful and hammers the bottleneck, so callers opt out.
   const doPrefetch = opts.prefetchSiblings !== false;
   // `settled`: data that changes only at settlements, refetched when the heartbeat's settlement moves, not by age
   const bySettlement = opts.settled === true;
+  const alsoByAge = opts.alsoByAge === true;
   const settled = useSyncExternalStore(subscribeSettled, () => (bySettlement ? settledHeight : null), () => null);
 
   const [state, setState] = useState<State<T>>(() => {
@@ -164,8 +194,7 @@ export function useTabData<T>(url: string, opts: { prefetchSiblings?: boolean; s
       if (doPrefetch) maybePrefetchSiblings(url);
       // fetched before the first heartbeat: it belongs to the settlement known now
       if (bySettlement && cached.settled == null) cached.settled = settled;
-      const behind = bySettlement ? settled != null && cached.settled != null && cached.settled < settled : Date.now() - cached.ts > STALE_MS;
-      if (behind) {
+      if (needsRefetch(cached, { bySettlement, alsoByAge, settled })) {
         fetchJson(url, false)
           .then((json) => {
             if (active) setState({ data: json as T, loading: false, error: null, url });
@@ -190,7 +219,7 @@ export function useTabData<T>(url: string, opts: { prefetchSiblings?: boolean; s
     return () => {
       active = false;
     };
-  }, [url, doPrefetch, bySettlement, settled]);
+  }, [url, doPrefetch, bySettlement, alsoByAge, settled]);
 
   return state;
 }

@@ -42,14 +42,25 @@ export async function getLastSettlement(): Promise<Settlement | null> {
   // one read at a time: the summary's two reward windows ask together on a cold cache
   const read = () =>
     (reading ??= gqlFetch<Parameters<typeof settledOf>[0]>(NETWORK, LAST_SETTLEMENT, {}, { cache: 'no-store' })
-      .then((data) => (lastWritten = settledOf(data, lastWritten)))
+      .then((data) => {
+        const settled = settledOf(data, lastWritten);
+        // a half-written settlement block and none seen written by this process (a new one): no answer, so a cached
+        // settlement is kept rather than replaced by none
+        if (settled == null && data.getLastSettlement) throw new Error('the last settlement block is still being written');
+        return (lastWritten = settled);
+      })
       .finally(() => (reading = null)));
   try {
-    return await staleValue(['last-settlement'], 30, read, () => false);
+    const cached = await staleValue(['last-settlement'], 30, read, () => false);
+    // what the cache holds is also this process's last fully written settlement
+    if (cached && (!lastWritten || cached.height > lastWritten.height)) lastWritten = cached;
+    return cached ?? lastWritten;
   } catch (e) {
-    // outside a Next server (scripts, tests) there is no cache: read it
-    if (e instanceof Error && e.message.startsWith('Invariant: incrementalCache missing')) return read();
-    throw e;
+    // The reward reads never depend on this one: without it they read the window ending now, as before. Outside a Next
+    // server (scripts, tests) there is no cache: read it directly.
+    if (e instanceof Error && e.message.startsWith('Invariant: incrementalCache missing')) return read().catch(() => lastWritten);
+    console.error('[settlement] last settlement read failed:', (e as Error).message);
+    return lastWritten;
   }
 }
 

@@ -38,10 +38,12 @@ export interface OperatorSummary {
 /** Summary cards for the Operator tool: how many suppliers pay these rev-share addresses + their
  *  combined stake, plus the trailing-24h/48h rewards paid to the addresses. */
 export async function getOperatorSummary(addresses: string[]): Promise<OperatorSummary> {
+  // one settlement for both windows
+  const settled = getLastSettlement();
   const [fleet, r24, r48] = await Promise.all([
     fetchFleetSummary({ operators: addresses }, 1800),
-    getRewardsWindow(addresses, 24 * 3600),
-    getRewardsWindow(addresses, 48 * 3600),
+    settled.then((s) => getRewardsWindow(addresses, 24 * 3600, s)),
+    settled.then((s) => getRewardsWindow(addresses, 48 * 3600, s)),
   ]);
   return {
     supplierCount: fleet.supplierCount,
