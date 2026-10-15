@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { unstable_cache } from 'next/cache';
+import { staleValue } from '@/lib/window-cache';
 import { getOwnerSuppliers } from '@/lib/data/owner';
 import { type SupplierListPage, getMinStakeUpokt, isStakeFilter, type StakeFilter } from '@/lib/data/suppliers-list';
 import { ADDRESS_RE } from '@/lib/staking/addresses';
@@ -33,10 +33,10 @@ export async function GET(req: NextRequest) {
   // the key, so a governance change starts a new entry.
   const after = afterParam || null;
   const minStake = filter === 'below_min' ? await getMinStakeUpokt() : 0;
-  const page = await unstable_cache(
-    () => getOwnerSuppliers(addresses, filter, after, pageSize, minStake),
+  const page = await staleValue(
     ['owner-suppliers', addresses.join(','), filter, after ?? '', String(pageSize), String(minStake)],
-    { revalidate: 1800 },
-  )();
+    1800,
+    () => getOwnerSuppliers(addresses, filter, after, pageSize, minStake),
+  );
   return NextResponse.json(page);
 }

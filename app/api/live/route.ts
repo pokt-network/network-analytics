@@ -1,4 +1,4 @@
-import { unstable_cache } from 'next/cache';
+import { staleCached } from '@/lib/window-cache';
 import { getStatus } from '@/lib/metadata';
 import { INDEXER_LAG_THRESHOLD } from '@/lib/config';
 import { NETWORK } from '@/lib/app-config';
@@ -66,7 +66,7 @@ export async function GET() {
   // failure blanks those two items instead of failing the whole heartbeat.
   return diagJson('live', async () => {
     const [cached, rolling] = await Promise.all([
-      unstable_cache(stamped(buildLive), ['live'], { revalidate: LIVE_TTL })(),
+      staleCached(['live'], LIVE_TTL, stamped(buildLive)),
       getCachedRolling24hStats().catch(() => null),
     ]);
     const payload: LivePayload = {

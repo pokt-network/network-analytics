@@ -27,20 +27,21 @@ export function tooOld(windowEnd: number | undefined, ttlSeconds: number, at: nu
 }
 
 /**
- * The cached value while it is fresh (built within one TTL) or stale within two TTLs; past that, `build`'s. A stale
+ * The cached value while it is fresh (built within one TTL) or stale but not `tooOld`; otherwise `build`'s. A stale
  * value calls `refresh` (with the new value when this request built one) to replace the entry after the response.
  */
-export async function serveWindow<T>(
-  read: () => Promise<WindowEnvelope<T>>,
-  build: () => Promise<WindowEnvelope<T>>,
-  refresh: (built?: WindowEnvelope<T>) => void,
+export async function serveCached<E extends Envelope<unknown>>(
+  read: () => Promise<E>,
+  build: () => Promise<E>,
+  refresh: (built?: E) => void,
   ttlSeconds: number,
+  tooOldAt: (value: E, at: number) => boolean,
   at: () => number = Date.now,
-): Promise<WindowEnvelope<T>> {
+): Promise<E> {
   const cached = await read();
   const t = at();
   if (t - cached.__diagBuiltAt <= ttlSeconds * 1000) return cached;
-  if (!tooOld(cached.windowEnd, ttlSeconds, t)) {
+  if (!tooOldAt(cached, t)) {
     refresh();
     return cached;
   }
@@ -49,8 +50,57 @@ export async function serveWindow<T>(
   return built;
 }
 
+/** serveCached for a range's value: stale is served within two TTLs of its window's end. */
+export function serveWindow<T>(
+  read: () => Promise<WindowEnvelope<T>>,
+  build: () => Promise<WindowEnvelope<T>>,
+  refresh: (built?: WindowEnvelope<T>) => void,
+  ttlSeconds: number,
+  at: () => number = Date.now,
+): Promise<WindowEnvelope<T>> {
+  return serveCached(read, build, refresh, ttlSeconds, (v, t) => tooOld(v.windowEnd, ttlSeconds, t), at);
+}
+
 /** Keys this process is rebuilding: a stale entry is rebuilt once, however many requests read it meanwhile. */
 const refreshing = new Set<string>();
+
+/**
+ * `build`'s value cached `ttlSeconds` under `key`, served at once while stale and rebuilt after the response (see the
+ * top of this file); a value `tooOldAt` is not served (default: none is, as unstable_cache serves any stale entry).
+ */
+export function staleCached<E extends Envelope<unknown>>(
+  key: string[],
+  ttlSeconds: number,
+  build: () => Promise<E>,
+  tooOldAt: (value: E, at: number) => boolean = () => false,
+  tags?: string[],
+): Promise<E> {
+  const id = key.join('\n');
+  // One entry per key: every call goes through this one function, so unstable_cache's key (its callback's source and
+  // `key`) is the same for the read and the write. `revalidate` only decides whether unstable_cache sees the entry stale.
+  const entry = (revalidate: number, produce: () => Promise<E>) => unstable_cache(async () => produce(), key, { revalidate, tags })();
+  const refresh = (built?: E) => {
+    if (refreshing.has(id)) return;
+    refreshing.add(id);
+    after(async () => {
+      try {
+        const value = built ?? (await build());
+        // The entry was built more than one TTL ago, so a read with half the TTL sees it stale and stores `value` in its
+        // place. The write keeps that revalidate as the entry's own: half a TTL, not 1 s, in case a remote data cache
+        // (Vercel's, not read here) evicts by it. Reads pass a year, so the entry's age is judged by serveCached alone.
+        await entry(Math.max(1, Math.floor(ttlSeconds / 2)), async () => value);
+      } finally {
+        refreshing.delete(id);
+      }
+    });
+  };
+  return serveCached(() => entry(ONE_YEAR_SECONDS, build), build, refresh, ttlSeconds, tooOldAt);
+}
+
+/** staleCached for a value that carries no build time of its own: the entry stamps it. */
+export async function staleValue<T>(key: string[], ttlSeconds: number, build: () => Promise<T>, tags?: string[]): Promise<T> {
+  return (await staleCached(key, ttlSeconds, stamped(build), undefined, tags)).data;
+}
 
 /**
  * A range's value from `build(now)`, cached `ttlSeconds` under `parts` + the range. `now` is the window's end (the
@@ -58,30 +108,9 @@ const refreshing = new Set<string>();
  * with the value.
  */
 export function rangeCached<T>(parts: string[], range: RangeKey, ttlSeconds: number, build: (now: number) => Promise<T>, tags?: string[]): Promise<WindowEnvelope<T>> {
-  const key = [...parts, range];
-  const id = key.join('\n');
   const windowed = async (): Promise<WindowEnvelope<T>> => {
     const now = Math.floor(Date.now() / WINDOW_BUCKET_MS) * WINDOW_BUCKET_MS;
     return { ...(await stamped(() => build(now))()), windowEnd: now };
   };
-  // One entry per key: every call goes through this one function, so unstable_cache's key (its callback's source and
-  // `key`) is the same for the read and the write. `revalidate` only decides whether unstable_cache sees the entry stale.
-  const entry = (revalidate: number, produce: () => Promise<WindowEnvelope<T>>) =>
-    unstable_cache(async () => produce(), key, { revalidate, tags })();
-  const refresh = (built?: WindowEnvelope<T>) => {
-    if (refreshing.has(id)) return;
-    refreshing.add(id);
-    after(async () => {
-      try {
-        const value = built ?? (await windowed());
-        // The entry was built more than one TTL ago, so a read with half the TTL sees it stale and stores `value` in its
-        // place. The write keeps that revalidate as the entry's own: half a TTL, not 1 s, in case a remote data cache
-        // (Vercel's, not read here) evicts by it. Reads pass a year, so the entry's age is judged by serveWindow alone.
-        await entry(Math.max(1, Math.floor(ttlSeconds / 2)), async () => value);
-      } finally {
-        refreshing.delete(id);
-      }
-    });
-  };
-  return serveWindow(() => entry(ONE_YEAR_SECONDS, windowed), windowed, refresh, ttlSeconds);
+  return staleCached([...parts, range], ttlSeconds, windowed, (v, t) => tooOld(v.windowEnd, ttlSeconds, t), tags);
 }

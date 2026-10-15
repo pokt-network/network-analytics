@@ -1,4 +1,4 @@
-import { unstable_cache } from 'next/cache';
+import { staleValue } from '@/lib/window-cache';
 import { gqlFetch } from '@/lib/graphql';
 import { toDate } from '@/lib/time';
 import { NETWORK } from '@/lib/app-config';
@@ -101,6 +101,8 @@ export const ROLLING_TTL = 30;
  *  and `60d` would each hold their own copy, warmed at different times, and toggling the range pill
  *  would visibly change values that are supposed to be a fixed rolling window. Route handlers must
  *  call this alongside their own cached payload and merge the result, never from within it. */
-export const getCachedRolling24hStats = unstable_cache(getRolling24hStats, ['rolling24h'], {
-  revalidate: ROLLING_TTL,
-});
+export async function getCachedRolling24hStats(): Promise<Rolling24h> {
+  // served at once while stale and rebuilt after the response, as unstable_cache's own revalidation would hold the end
+  // of the response (lib/window-cache.ts); a stale entry of any age is served, as before
+  return staleValue(['rolling24h', 'v2'], ROLLING_TTL, getRolling24hStats);
+}

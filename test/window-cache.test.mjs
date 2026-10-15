@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 globalThis.AsyncLocalStorage = AsyncLocalStorage;
-const { serveWindow, tooOld } = await import('../lib/window-cache.ts');
+const { serveCached, serveWindow, tooOld } = await import('../lib/window-cache.ts');
 
 const TTL = 600;
 const t = Date.parse('2026-10-15T12:00:00Z');
@@ -46,4 +46,14 @@ test('the edge, and a value with no window (written before this cache carried on
   assert.equal(tooOld(t - 2 * TTL * 1000, TTL, t), false);
   assert.equal(tooOld(t - 2 * TTL * 1000 - 1, TTL, t), true);
   assert.equal(tooOld(undefined, TTL, t), true);
+});
+
+test('with no too-old rule (the rolling-24h entry), a stale value of any age is served at once and refreshed after', async () => {
+  let builds = 0;
+  const refreshes = [];
+  const cached = { __diagBuiltAt: t - 3 * 3_600_000, data: 'three hours old' };
+  const out = await serveCached(async () => cached, async () => (builds++, { __diagBuiltAt: t, data: 'fresh' }), (b) => refreshes.push(b), 30, () => false, () => t);
+  assert.equal(out.data, 'three hours old');
+  assert.equal(builds, 0);
+  assert.deepEqual(refreshes, [undefined]);
 });

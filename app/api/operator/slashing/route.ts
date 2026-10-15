@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { unstable_cache } from 'next/cache';
+import { staleValue } from '@/lib/window-cache';
 import { getOperatorSlashPage, getOperatorSlashTotals, slashCacheKeys, type SlashPage } from '@/lib/data/operator';
 import { ADDRESS_RE } from '@/lib/staking/addresses';
 import { DEFAULT_RANGE, isRangeKey, OWNER_ADDRESS_CAP, type RangeKey } from '@/lib/app-config';
@@ -56,10 +56,10 @@ export async function GET(req: NextRequest) {
   const keys = slashCacheKeys(addresses, range, { after, pageSize, lookahead }, at);
   const [totals, page] = await Promise.all([
     // 60 s: the key changes with the window's 60 s bucket, so a longer TTL would never be reached
-    unstable_cache(() => getOperatorSlashTotals(addresses, range, keys.now), keys.totals, { revalidate: 60 })(),
+    staleValue(keys.totals, 60, () => getOperatorSlashTotals(addresses, range, keys.now)),
     // the validated page is what is cached (60 s): an answer with `errors` or one that fails to process throws and is
     // not kept (the reads use no fetch cache)
-    unstable_cache(() => getOperatorSlashPage(addresses, range, pageSize, after, lookahead, keys.now), keys.page, { revalidate: 60 })(),
+    staleValue(keys.page, 60, () => getOperatorSlashPage(addresses, range, pageSize, after, lookahead, keys.now)),
   ]);
   return NextResponse.json({ ...page, ...totals, at: keys.now } satisfies SlashPage);
 }
