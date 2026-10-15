@@ -31,6 +31,7 @@ export function settledOf(
 }
 
 let lastWritten: Settlement | null = null;
+let reading: Promise<Settlement | null> | null = null;
 
 /**
  * The last fully written settlement (null before the first one, or while none has been seen written yet). Cached 30 s and
@@ -38,11 +39,11 @@ let lastWritten: Settlement | null = null;
  * so the windows it gives are only older, never partial, and no reward read waits for this one.
  */
 export async function getLastSettlement(): Promise<Settlement | null> {
-  const read = async () => {
-    const data = await gqlFetch<Parameters<typeof settledOf>[0]>(NETWORK, LAST_SETTLEMENT, {}, { cache: 'no-store' });
-    lastWritten = settledOf(data, lastWritten);
-    return lastWritten;
-  };
+  // one read at a time: the summary's two reward windows ask together on a cold cache
+  const read = () =>
+    (reading ??= gqlFetch<Parameters<typeof settledOf>[0]>(NETWORK, LAST_SETTLEMENT, {}, { cache: 'no-store' })
+      .then((data) => (lastWritten = settledOf(data, lastWritten)))
+      .finally(() => (reading = null)));
   try {
     return await staleValue(['last-settlement'], 30, read, () => false);
   } catch (e) {
