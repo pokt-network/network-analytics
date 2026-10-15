@@ -59,3 +59,14 @@ test('microsecond timestamps round-trip', () => {
   assert.equal(microsToIso(u('2026-10-15T01:33:16.796001+00:00')), '2026-10-15T01:33:16.796001Z');
   assert.equal(u('2026-10-15T01:33:16Z'), u('2026-10-15T01:33:16.000000Z'));
 });
+
+test('toMicros reads a space separator, keeps an epoch number to the ms, and refuses a fraction it cannot place', () => {
+  assert.equal(u('2026-10-01 23:00:00.123456+00:00'), u('2026-10-01T23:00:00.123456+00:00'));
+  assert.equal(u('2026-10-01 23:00:00.123456+00:00') % 1000000n, 123456n);
+  const ms = Date.parse('2026-10-01T23:00:00.123Z');
+  assert.equal(u(ms), BigInt(ms) * 1000n);
+  assert.equal(u(String(ms)), BigInt(ms) * 1000n);
+  assert.equal(u('2026-10-01T23:00:00.123456+00:00') - u(ms), 456n);
+  assert.equal(u('Oct 1, 2026 23:00:00.5 UTC'), null);
+  assert.equal(u(null), null);
+});

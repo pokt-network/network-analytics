@@ -308,8 +308,9 @@ async function slashesIn(addresses: string[], from: string, to: string): Promise
  *  starts before that hour (a late start, a gap, a lag over an hour; none on mainnet on 2026-10-15). The figures are
  *  floors ("at least", `capped`) when a read came back full, an event has no time, or the indexed blocks trail the
  *  window's end by more than a few blocks. The caller caches it. */
-export async function getOperatorSlashTotals(addresses: string[], range: RangeKey): Promise<SlashTotals> {
-  const w = rangeWindow(range);
+export async function getOperatorSlashTotals(addresses: string[], range: RangeKey, now?: number): Promise<SlashTotals> {
+  // `now`: the instant the window ends at (the caller's cache key holds the same one)
+  const w = rangeWindow(range, now);
   // every time in µs: covered_to is a block's time + 1 µs, which milliseconds would round onto the block (counted twice)
   const us = (iso: string | null | undefined) => toMicros(iso);
   const start = us(w.startISO)!;
@@ -383,8 +384,9 @@ export async function getOperatorSlashPage(
   pageSize: number,
   after: string | null,
   lookahead = true,
+  now?: number,
 ): Promise<Omit<SlashPage, keyof SlashTotals>> {
-  const w = rangeWindow(range);
+  const w = rangeWindow(range, now);
   const cut = after ? after.indexOf(':') : -1;
   if (after && cut <= 0) throw new Error(`slashing: invalid cursor ${after}`);
   const rowLimit = Math.min(lookahead ? pageSize + 1 : pageSize, LIFECYCLE_ROW_LIMIT);

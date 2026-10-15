@@ -3,14 +3,16 @@ import { unstable_cache } from 'next/cache';
 import { getOperatorSlashPage, getOperatorSlashTotals, type SlashPage } from '@/lib/data/operator';
 import { ADDRESS_RE } from '@/lib/staking/addresses';
 import { DEFAULT_RANGE, isRangeKey, OWNER_ADDRESS_CAP, type RangeKey } from '@/lib/app-config';
+import { rangeWindow } from '@/lib/timeranges';
 
 const PAGE_SIZE = 25;
 // the indexer returns at most 1000 rows a call. A pager page reads one row more to tell whether another follows, so it
 // takes up to 999; the export walk (lookahead=0) reads no extra row and takes up to 1000, stopping at a short page.
 const MAX_PAGE_SIZE = 999;
 const MAX_EXPORT_PAGE_SIZE = 1000;
-// endCursor of a page: the last row's height and id
-const CURSOR_RE = /^\d+:.+$/;
+// endCursor of a page: the last row's height and id; an event id is `<tx hash or height>-<event kind>-<index>`
+// (pocketdex getEventId; slashes are `<height>-finalize_block-<index>`)
+const CURSOR_RE = /^\d+:[0-9A-Fa-f]+-[a-z_]+-\d+$/;
 
 function parseAddrs(param: string | null): string[] {
   if (!param) return [];
@@ -37,13 +39,19 @@ export async function GET(req: NextRequest) {
       rows: [], hasNextPage: false, endCursor: null, indexed: true, range: null, totalCount: 0, penaltyUpokt: '0', capped: false,
     } satisfies SlashPage);
   }
+  // the window, in its 60 s bucket, is part of both keys: a route serves a stale entry as it is, so a key with the range
+  // name alone would answer an old window after a quiet stretch. The functions read the same window.
+  const end = rangeWindow(range).endISO;
+  const now = Date.parse(end);
   const [totals, page] = await Promise.all([
-    unstable_cache(() => getOperatorSlashTotals(addresses, range), ['operator-slash-totals', addresses.join(','), range], { revalidate: 300 })(),
+    unstable_cache(() => getOperatorSlashTotals(addresses, range, now), ['operator-slash-totals', addresses.join(','), range, end], {
+      revalidate: 300,
+    })(),
     // the validated page is what is cached (5 min): an answer with `errors` or one that fails to process throws and is
     // not kept (the reads use no fetch cache)
     unstable_cache(
-      () => getOperatorSlashPage(addresses, range, pageSize, after, lookahead),
-      ['operator-slash-page', addresses.join(','), range, after ?? '', String(pageSize), lookahead ? 'pager' : 'export'],
+      () => getOperatorSlashPage(addresses, range, pageSize, after, lookahead, now),
+      ['operator-slash-page', addresses.join(','), range, end, after ?? '', String(pageSize), lookahead ? 'pager' : 'export'],
       { revalidate: 300 },
     )(),
   ]);

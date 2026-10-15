@@ -66,10 +66,16 @@ function parse(range: CoverageRange) {
 /** An indexer timestamp as microseconds since the epoch, exactly. The indexer's covered_to is a block's time + 1 µs, and
  *  a millisecond Date rounds that back onto the block itself, so comparisons against it are made here in µs. Null when
  *  it is missing or unparseable. */
-export function toMicros(iso: string | null | undefined): bigint | null {
-  const d = toDate(iso ?? null);
-  if (!d || !iso) return null;
-  const frac = (iso.match(/T\d{2}:\d{2}:\d{2}\.(\d+)/)?.[1] ?? '').padEnd(6, '0').slice(0, 6);
+export function toMicros(input: string | number | null | undefined): bigint | null {
+  if (input == null || input === '') return null;
+  const d = toDate(input);
+  if (!d) return null;
+  // epoch numbers (toDate's ms or s): exact to the millisecond
+  if (typeof input === 'number' || /^\d+$/.test(input)) return BigInt(d.getTime()) * BigInt(1000);
+  const m = input.match(/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.(\d+))?/);
+  // a fraction the pattern cannot place is not truncated into a wrong instant
+  if (!m) return /\.\d/.test(input) ? null : BigInt(d.getTime()) * BigInt(1000);
+  const frac = (m[1] ?? '').padEnd(6, '0').slice(0, 6);
   return BigInt(Math.floor(d.getTime() / 1000)) * BigInt(1_000_000) + BigInt(frac);
 }
 

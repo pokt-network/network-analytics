@@ -45,6 +45,8 @@ export function RewardIssuancesTab() {
         EXPORT_CHUNK,
         EXPORT_CAP,
         EXPORT_MAX_CALLS,
+        // at the cap on a full page, 1 row past the last cursor tells whether the export is complete
+        true,
       );
       const rows = all.slice(0, EXPORT_CAP);
       const capped = all.length > EXPORT_CAP || !complete;

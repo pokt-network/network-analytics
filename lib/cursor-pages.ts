@@ -102,12 +102,17 @@ export function walkCheck(shown: string[][], page: number, keys: string[], hasNe
  * Every row of a keyset route from its first page, `chunk` rows a call, stepping by the rows and cursor each page
  * returns, at most `cap` rows and `maxCalls` calls. `complete` is false when it stopped at a cap with rows left. A
  * failed call, or a page that says more follow without a cursor, throws.
+ *
+ * `probeAtCap`: a route paged with no lookahead row says "more may follow" on every full page, so a walk that reaches
+ * the cap on a full page cannot tell whether it read everything; with this it reads 1 row past the last cursor to
+ * know (one extra call, only at that edge).
  */
 export async function walkPages<R>(
   pageUrl: (after: string | null, size: number) => string,
   chunk: number,
   cap: number,
   maxCalls: number,
+  probeAtCap = false,
 ): Promise<{ rows: R[]; complete: boolean }> {
   const rows: R[] = [];
   let after: string | null = null;
@@ -121,15 +126,11 @@ export async function walkPages<R>(
     if (!data.endCursor) throw new Error('a page says more rows follow but carries no cursor');
     after = data.endCursor;
   }
+  if (probeAtCap && rows.length >= cap && after) {
+    const res = await fetch(pageUrl(after, 1));
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const next = (await res.json()) as { rows: R[] };
+    return { rows, complete: next.rows.length === 0 };
+  }
   return { rows, complete: false };
-}
-
-/**
- * Whether an export walk read every row. walkPages says so when a page came back short; a walk that stopped at the cap
- * on a full page with no lookahead row cannot tell, but a known count can: `total` rows read is all of them (unless the
- * count is a floor, `totalIsFloor`).
- */
-export function exportIsComplete(walkComplete: boolean, read: number, cap: number, total?: number, totalIsFloor = false): boolean {
-  if (walkComplete && read <= cap) return true;
-  return typeof total === 'number' && !totalIsFloor && Math.min(read, cap) === total;
 }

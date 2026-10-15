@@ -27,14 +27,30 @@ test('a page missing in the record (a hole) is not counted as walked', () => {
   assert.deepEqual(walkCheck(shown, 3, ['c'], false, 5), { repeats: 0, missed: 0 });
 });
 
-test('an export that stops at the cap on a full page is complete when the count says so', async () => {
-  const { exportIsComplete } = await import('../lib/cursor-pages.ts');
-  // exactly 5000 slashes, read as 5 full pages of 1000: the walk cannot tell, the count can
-  assert.equal(exportIsComplete(false, 5000, 5000, 5000), true);
-  // more than the cap: capped
-  assert.equal(exportIsComplete(false, 5000, 5000, 5001), false);
-  // a count that is a floor ("at least") cannot vouch for it
-  assert.equal(exportIsComplete(false, 5000, 5000, 5000, true), false);
-  // a walk that ended on a short page is complete whatever the count
-  assert.equal(exportIsComplete(true, 1446, 5000, 1450), true);
+test('walkPages at the cap on a full page reads 1 row past the last cursor to know whether it is complete', async () => {
+  const { walkPages } = await import('../lib/cursor-pages.ts');
+  const realFetch = globalThis.fetch;
+  const run = async (total) => {
+    const urls = [];
+    globalThis.fetch = async (url) => {
+      urls.push(url);
+      const after = Number(new URL(url, 'http://x').searchParams.get('after') ?? 0);
+      const size = Number(new URL(url, 'http://x').searchParams.get('size'));
+      const n = Math.max(0, Math.min(size, total - after));
+      const rows = Array.from({ length: n }, (_, i) => after + i);
+      return new Response(JSON.stringify({ rows, hasNextPage: n === size, endCursor: n ? String(after + n) : null }), { status: 200 });
+    };
+    const walk = await walkPages((after, size) => `/x?size=${size}${after ? `&after=${after}` : ''}`, 1000, 5000, 6, true);
+    return { ...walk, calls: urls.length, read: walk.rows.length };
+  };
+  try {
+    // exactly 5000: five full pages, then 1 row past them answers empty
+    assert.deepEqual(await run(5000).then(({ complete, calls, read }) => ({ complete, calls, read })), { complete: true, calls: 6, read: 5000 });
+    // more than the cap: the probe finds a row
+    assert.deepEqual(await run(5001).then(({ complete, calls, read }) => ({ complete, calls, read })), { complete: false, calls: 6, read: 5000 });
+    // under the cap, the short page ends it: no probe
+    assert.deepEqual(await run(1434).then(({ complete, calls, read }) => ({ complete, calls, read })), { complete: true, calls: 2, read: 1434 });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
