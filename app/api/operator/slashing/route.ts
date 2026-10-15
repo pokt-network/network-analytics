@@ -5,9 +5,10 @@ import { ADDRESS_RE } from '@/lib/staking/addresses';
 import { DEFAULT_RANGE, isRangeKey, OWNER_ADDRESS_CAP, type RangeKey } from '@/lib/app-config';
 
 const PAGE_SIZE = 25;
-// the indexer's getActorLifecycleJson returns at most 1000 rows a call, and each page reads one row more to tell whether
-// another follows
+// the indexer returns at most 1000 rows a call. A pager page reads one row more to tell whether another follows, so it
+// takes up to 999; the export walk (lookahead=0) reads no extra row and takes up to 1000, stopping at a short page.
 const MAX_PAGE_SIZE = 999;
+const MAX_EXPORT_PAGE_SIZE = 1000;
 // endCursor of a page: the last row's height and id
 const CURSOR_RE = /^\d+:.+$/;
 
@@ -20,8 +21,10 @@ function parseAddrs(param: string | null): string[] {
 // (small), each page is its own small cached read.
 export async function GET(req: NextRequest) {
   const addresses = parseAddrs(req.nextUrl.searchParams.get('addresses'));
+  const lookahead = req.nextUrl.searchParams.get('lookahead') !== '0';
   const reqSize = Number(req.nextUrl.searchParams.get('pageSize'));
-  const pageSize = Number.isFinite(reqSize) && reqSize > 0 ? Math.min(Math.floor(reqSize), MAX_PAGE_SIZE) : PAGE_SIZE;
+  const pageSize =
+    Number.isFinite(reqSize) && reqSize > 0 ? Math.min(Math.floor(reqSize), lookahead ? MAX_PAGE_SIZE : MAX_EXPORT_PAGE_SIZE) : PAGE_SIZE;
   const rangeParam = req.nextUrl.searchParams.get('range');
   const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
   // after=<endCursor of the previous page> reads the rows that follow it; without it, the first page. An after that is
@@ -36,7 +39,7 @@ export async function GET(req: NextRequest) {
   }
   const [totals, page] = await Promise.all([
     unstable_cache(() => getOperatorSlashTotals(addresses, range), ['operator-slash-totals', addresses.join(','), range], { revalidate: 300 })(),
-    getOperatorSlashPage(addresses, range, pageSize, after),
+    getOperatorSlashPage(addresses, range, pageSize, after, lookahead),
   ]);
   return NextResponse.json({ ...page, ...totals } satisfies SlashPage);
 }

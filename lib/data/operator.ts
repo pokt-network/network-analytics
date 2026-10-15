@@ -9,7 +9,7 @@ import {
   REWARDS_BY_ADDRESSES_SERVICE,
   OVERSERVICED_BY_ADDRESSES,
   SUPPLIER_SLASHES,
-  SUPPLIER_SLASHES_RANGE,
+  SUPPLIER_SLASH_PAGE,
   SUPPLIER_SLASH_TOTALS,
 } from '@/lib/queries/analytics';
 import { num, parseScalar } from './_util';
@@ -205,11 +205,11 @@ export async function getOperatorOverserviced(addresses: string[], range: RangeK
 // always resolve `operators` to the same set.
 const SLASH_OPERATOR_SCOPE = 'now';
 
+/** A slashing event as the export's list page sends it. */
 interface SlashRaw {
   height: string;
   id: string;
-  /** read by the totals' tail only */
-  blockTime?: string;
+  blockTime: string | null;
   actorId: string;
   penaltyUpokt: string;
   previousStakeUpokt: string;
@@ -217,10 +217,34 @@ interface SlashRaw {
   proofValidationStatus: string | null;
   serviceId: string | null;
   applicationId: string | null;
-  coveredFrom: string | null;
-  coveredTo: string | null;
-  coveredGaps: Array<{ from: string | null; to: string | null }> | null;
 }
+
+/** A slashing event as the JSON twin sends it (the pager's page and the totals' tail): snake-case, numbers as strings. */
+interface SlashJsonRaw {
+  height: string;
+  id: string;
+  block_time: string | null;
+  actor_id: string;
+  penalty_upokt: string;
+  previous_stake_upokt: string;
+  stake_upokt: string;
+  proof_validation_status: string | null;
+  service_id: string | null;
+  application_id: string | null;
+}
+
+const fromJson = (n: SlashJsonRaw): SlashRaw => ({
+  height: n.height,
+  id: n.id,
+  blockTime: n.block_time,
+  actorId: n.actor_id,
+  penaltyUpokt: n.penalty_upokt,
+  previousStakeUpokt: n.previous_stake_upokt,
+  stakeUpokt: n.stake_upokt,
+  proofValidationStatus: n.proof_validation_status,
+  serviceId: n.service_id,
+  applicationId: n.application_id,
+});
 
 interface SlashTotalRaw {
   kind: string;
@@ -259,121 +283,125 @@ export interface SlashPage extends SlashTotals {
 }
 
 const LIFECYCLE_ROW_LIMIT = 1000;
-/** Calls a count over a stretch the settlement tables do not cover makes at most (5,000 events). */
-const UNCOVERED_MAX_CALLS = 5;
 const HOUR_MS = 3_600_000;
+/** How far the indexed blocks may trail the window's end before the totals stop being complete: about a few blocks. */
+const INDEX_LAG_SLACK_MS = 5 * 60_000;
 
 const slashSum = (rows: Array<Pick<SlashRaw, 'penaltyUpokt'>>) => rows.reduce((s, r) => s + BigInt(r.penaltyUpokt ?? '0'), BigInt(0));
 
-/** Slashing events in [from, to) counted from the indexed blocks (the lifecycle rows), at most UNCOVERED_MAX_CALLS calls. */
-async function countSlashes(addresses: string[], from: string, to: string): Promise<{ count: number; sum: bigint; capped: boolean }> {
-  let count = 0;
-  let sum = BigInt(0);
-  let before: { beforeHeight: string; beforeId: string } | null = null;
-  for (let calls = 0; calls < UNCOVERED_MAX_CALLS; calls++) {
-    const data: { getActorLifecycleList: SlashRaw[] | null } = await gqlFetch(
-      NETWORK,
-      SUPPLIER_SLASHES,
-      { operators: addresses, operatorScope: SLASH_OPERATOR_SCOPE, start: from, end: to, rowLimit: LIFECYCLE_ROW_LIMIT, ...before },
-      { cache: 'no-store' },
-    );
-    const got: SlashRaw[] = data.getActorLifecycleList ?? [];
-    count += got.length;
-    sum += slashSum(got);
-    if (got.length < LIFECYCLE_ROW_LIMIT) return { count, sum, capped: false };
-    const last: SlashRaw = got[got.length - 1];
-    before = { beforeHeight: last.height, beforeId: last.id };
-  }
-  return { count, sum, capped: true };
+/** The slashing events of [from, to) from the indexed blocks, in ONE call of at most 1000 rows, newest first: `capped`
+ *  when the call came back full (older events of the stretch were not read). */
+async function slashesIn(addresses: string[], from: string, to: string): Promise<{ rows: SlashRaw[]; capped: boolean }> {
+  const data: { getActorLifecycleList: SlashRaw[] | null } = await gqlFetch(
+    NETWORK,
+    SUPPLIER_SLASHES,
+    { operators: addresses, operatorScope: SLASH_OPERATOR_SCOPE, start: from, end: to, rowLimit: LIFECYCLE_ROW_LIMIT },
+    { cache: 'no-store' },
+  );
+  const rows = data.getActorLifecycleList ?? [];
+  return { rows, capped: rows.length >= LIFECYCLE_ROW_LIMIT };
 }
 
 /** The range's slashing count and penalty sum: getSupplierPenaltiesJson for the part the settlement tables cover, plus
- *  the slashing events (indexed blocks) of what they do not cover yet: their lag behind the window's end (the last hour
- *  is read in the same request), and, rarely, a late start, a gap or a lag longer than an hour. The caller caches it. */
+ *  the slashing events (indexed blocks) of what they do not cover yet. Request count is bounded: one request (the
+ *  totals and the window's last hour of events), plus at most ONE more when a stretch the settlement tables do not cover
+ *  starts before that hour (a late start, a gap, a lag over an hour; none on mainnet on 2026-10-15). The figures are
+ *  floors ("at least", `capped`) when a read came back full, an event has no time, or the indexed blocks trail the
+ *  window's end by more than a few blocks. The caller caches it. */
 export async function getOperatorSlashTotals(addresses: string[], range: RangeKey): Promise<SlashTotals> {
   const w = rangeWindow(range);
   const ms = (iso: string | null | undefined) => toDate(iso)?.getTime() ?? NaN;
+  const startMs = ms(w.startISO);
   const endMs = ms(w.endISO);
-  const tailFrom = Math.max(ms(w.startISO), endMs - HOUR_MS);
-  const tailStart = new Date(tailFrom).toISOString();
-  const data = await gqlFetch<{ getSupplierPenaltiesJson: unknown; tail: Array<Pick<SlashRaw, 'blockTime' | 'penaltyUpokt'>> | null }>(
+  const tailFrom = Math.max(startMs, endMs - HOUR_MS);
+  const data = await gqlFetch<{ getSupplierPenaltiesJson: unknown; tail: unknown }>(
     NETWORK,
     SUPPLIER_SLASH_TOTALS,
-    { operators: addresses, operatorScope: SLASH_OPERATOR_SCOPE, start: w.startISO, end: w.endISO, tailStart },
+    { operators: addresses, operatorScope: SLASH_OPERATOR_SCOPE, start: w.startISO, end: w.endISO, tailStart: new Date(tailFrom).toISOString() },
     { cache: 'no-store' },
   );
   const t = unwrapRange<SlashTotalRaw[]>(parseScalar(data.getSupplierPenaltiesJson), false);
-  // nothing covered: the whole window from the indexed blocks (an indexer without the range contract sends no range:
-  // its totals stand as they are)
-  if (t.range && notCovered(t.range)) {
-    const all = await countSlashes(addresses, w.startISO, w.endISO);
-    return { totalCount: all.count, penaltyUpokt: all.sum.toString(), capped: all.capped };
-  }
-  // one row per reason (PROOF_MISSING, PROOF_INVALID)
-  const slashed = (t.data ?? []).filter((r) => r.kind === 'slashed');
-  let count = slashed.reduce((s, r) => s + num(r.events), 0);
-  let sum = slashed.reduce((s, r) => s + BigInt(r.slashed_upokt ?? '0'), BigInt(0));
-  let capped = false;
-  // the last hour's events with their time; one without a time cannot be placed in or out of a stretch: dropped, and
-  // the totals then say "at least"
-  const tail = (data.tail ?? []).map((r) => ({ ...r, t: ms(r.blockTime) }));
-  const placed = tail.filter((r) => Number.isFinite(r.t));
-  if (placed.length < tail.length) {
-    console.warn(`slashing totals: ${tail.length - placed.length} tail events without a block time, left out`);
-    capped = true;
-  }
-  // the uncovered stretches, each once (coverage.ts): a late start, the gaps, the end past covered_to
-  for (const [a, b] of t.range ? uncoveredSpans(t.range) : []) {
-    if (a >= tailFrom && tail.length < LIFECYCLE_ROW_LIMIT) {
-      // inside the last hour, already read
-      const rows = placed.filter((r) => r.t >= a && r.t < b);
-      count += rows.length;
-      sum += slashSum(rows);
-    } else {
-      const more = await countSlashes(addresses, new Date(a).toISOString(), new Date(b).toISOString());
-      count += more.count;
-      sum += more.sum;
-      capped ||= more.capped;
+  const tailPage = unwrapRange<SlashJsonRaw[]>(parseScalar(data.tail), false);
+  const tailRows = (tailPage.data ?? []).map(fromJson);
+  let capped = tailRows.length >= LIFECYCLE_ROW_LIMIT;
+  // the indexed blocks themselves trail the window's end: what is past them is not counted anywhere
+  const indexedTo = ms(tailPage.range?.covered_to);
+  if (tailPage.range && (!Number.isFinite(indexedTo) || indexedTo < endMs - INDEX_LAG_SLACK_MS)) capped = true;
+  // events with their time; one without a time cannot be placed in or out of a stretch: dropped, and the totals say
+  // "at least"
+  const timed = (rows: SlashRaw[]) => {
+    const placed = rows.map((r) => ({ ...r, t: ms(r.blockTime) })).filter((r) => Number.isFinite(r.t));
+    if (placed.length < rows.length) {
+      console.warn(`slashing totals: ${rows.length - placed.length} events without a block time, left out`);
+      capped = true;
     }
+    return placed;
+  };
+  // the stretches to count from the indexed blocks: the whole window when the settlement tables cover nothing, else
+  // each uncovered one once (coverage.ts: a late start, the gaps, the end past covered_to). An indexer that sends no
+  // range leaves its totals as they are.
+  const covered = !(t.range && notCovered(t.range));
+  const spans: Array<[number, number]> = !t.range ? [] : covered ? uncoveredSpans(t.range) : [[startMs, endMs]];
+  let count = 0;
+  let sum = BigInt(0);
+  if (covered) {
+    // one row per reason (PROOF_MISSING, PROOF_INVALID)
+    const slashed = (t.data ?? []).filter((r) => r.kind === 'slashed');
+    count = slashed.reduce((s, r) => s + num(r.events), 0);
+    sum = slashed.reduce((s, r) => s + BigInt(r.slashed_upokt ?? '0'), BigInt(0));
   }
+  // the events to place: the last hour (already read) and, for stretches before it, one more read from the earliest
+  const early = spans.filter(([a]) => a < tailFrom);
+  let events = timed(tailRows);
+  if (early.length) {
+    const more = await slashesIn(addresses, new Date(Math.min(...early.map(([a]) => a))).toISOString(), new Date(tailFrom).toISOString());
+    capped ||= more.capped;
+    events = events.concat(timed(more.rows));
+  }
+  const inSpans = events.filter((r) => spans.some(([a, b]) => r.t >= a && r.t < b));
+  count += inSpans.length;
+  sum += slashSum(inSpans);
   return { totalCount: count, penaltyUpokt: sum.toString(), capped };
 }
 
 /** One page of the operators' suppliers' slashing events in a range, newest first: the first page, or the rows after
- *  `after` (the endCursor of the page before, `height:id`). */
+ *  `after` (the endCursor of the page before, `height:id`). The pager (`lookahead`, one row past the page) reads the JSON
+ *  twin, whose coverage comes even with no rows, so a page is one request; the export reads the list with only the
+ *  fields it writes, `pageSize` rows with no lookahead row. */
 export async function getOperatorSlashPage(
   addresses: string[],
   range: RangeKey,
   pageSize: number,
   after: string | null,
+  lookahead = true,
 ): Promise<Omit<SlashPage, keyof SlashTotals>> {
   const w = rangeWindow(range);
   const cut = after ? after.indexOf(':') : -1;
-  // one row past the page tells whether another page follows
-  const rowLimit = Math.min(pageSize + 1, LIFECYCLE_ROW_LIMIT);
-  const vars = { operators: addresses, operatorScope: SLASH_OPERATOR_SCOPE, start: w.startISO, end: w.endISO };
-  const data = await gqlFetch<{ getActorLifecycleList: SlashRaw[] | null }>(
-    NETWORK,
-    SUPPLIER_SLASHES,
-    {
-      operators: addresses,
-      operatorScope: SLASH_OPERATOR_SCOPE,
-      start: w.startISO,
-      end: w.endISO,
-      rowLimit,
-      beforeHeight: cut > 0 ? after!.slice(0, cut) : null,
-      beforeId: cut > 0 ? after!.slice(cut + 1) : null,
-    },
-    { revalidate: 300 },
-  );
-  const all = data.getActorLifecycleList ?? [];
-  // the covered part of the window: on every row; a page with no rows asks for it on its own
-  const covered: CoverageRange | null = all.length
-    ? { requested_from: w.startISO, requested_to: w.endISO, covered_from: all[0].coveredFrom, covered_to: all[0].coveredTo, gaps: all[0].coveredGaps ?? [], end_inclusive: false }
-    : unwrapRange<unknown>(parseScalar((await gqlFetch<{ getActorLifecycleJson: unknown }>(NETWORK, SUPPLIER_SLASHES_RANGE, vars, { revalidate: 300 })).getActorLifecycleJson), false).range;
+  if (after && cut <= 0) throw new Error(`slashing: invalid cursor ${after}`);
+  const rowLimit = Math.min(lookahead ? pageSize + 1 : pageSize, LIFECYCLE_ROW_LIMIT);
+  const vars = {
+    operators: addresses,
+    operatorScope: SLASH_OPERATOR_SCOPE,
+    start: w.startISO,
+    end: w.endISO,
+    rowLimit,
+    beforeHeight: after ? after.slice(0, cut) : null,
+    beforeId: after ? after.slice(cut + 1) : null,
+  };
+  let covered: CoverageRange | null = null;
+  let all: SlashRaw[];
+  if (lookahead) {
+    const data = await gqlFetch<{ getActorLifecycleJson: unknown }>(NETWORK, SUPPLIER_SLASH_PAGE, vars, { revalidate: 300 });
+    const page = unwrapRange<SlashJsonRaw[]>(parseScalar(data.getActorLifecycleJson), false);
+    covered = page.range;
+    all = (page.data ?? []).map(fromJson);
+  } else {
+    all = (await gqlFetch<{ getActorLifecycleList: SlashRaw[] | null }>(NETWORK, SUPPLIER_SLASHES, vars, { revalidate: 300 })).getActorLifecycleList ?? [];
+  }
   const nodes = all.slice(0, pageSize);
   const last = nodes[nodes.length - 1];
   return {
+    // the export (no range) reads as indexed: it only follows the rows
     indexed: !notCovered(covered),
     range: covered,
     hasNextPage: all.length === rowLimit,

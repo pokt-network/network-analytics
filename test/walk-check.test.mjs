@@ -20,3 +20,9 @@ test('nothing is reported missed before the last page or without every earlier p
   assert.deepEqual(walkCheck([['a', 'b']], 2, ['d'], true, 4), { repeats: 0, missed: 0 });
   assert.deepEqual(walkCheck([], 2, ['d'], false, 4), { repeats: 0, missed: 0 });
 });
+
+test('a page missing in the record (a hole) is not counted as walked', () => {
+  const shown = [];
+  shown[1] = ['b'];
+  assert.deepEqual(walkCheck(shown, 3, ['c'], false, 5), { repeats: 0, missed: 0 });
+});

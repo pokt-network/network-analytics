@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { unstable_cache } from 'next/cache';
 import { getOwnerSuppliers } from '@/lib/data/owner';
 import { type SupplierListPage, isStakeFilter, type StakeFilter } from '@/lib/data/suppliers-list';
 import { ADDRESS_RE } from '@/lib/staking/addresses';
@@ -27,5 +28,10 @@ export async function GET(req: NextRequest) {
   if (afterParam !== null && !CURSOR_RE.test(afterParam)) return NextResponse.json({ error: 'invalid after cursor' }, { status: 400 });
 
   if (addresses.length === 0) return NextResponse.json({ rows: [], totalCount: 0 } satisfies SupplierListPage);
-  return NextResponse.json(await getOwnerSuppliers(addresses, filter, afterParam || null, pageSize));
+  // the processed page is what is cached (30 min): a page that fails to process throws and is not kept
+  const after = afterParam || null;
+  const page = await unstable_cache(() => getOwnerSuppliers(addresses, filter, after, pageSize), ['owner-suppliers', addresses.join(','), filter, after ?? '', String(pageSize)], {
+    revalidate: 1800,
+  })();
+  return NextResponse.json(page);
 }

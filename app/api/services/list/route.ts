@@ -16,8 +16,13 @@ class ShortList extends Error {
   }
 }
 
+// A short read is kept 60 s in this server instance, so a run of requests does not walk the list twice each.
+const SHORT_TTL_MS = 60_000;
+let lastShort: { at: number; list: ServicesList } | null = null;
+
 export async function GET() {
   return diagJson('services-list', async () => {
+    if (lastShort && Date.now() - lastShort.at < SHORT_TTL_MS) return lastShort.list;
     try {
       return await unstable_cache(
         stamped(async () => {
@@ -29,7 +34,10 @@ export async function GET() {
         { revalidate: 43200, tags: ['analytics'] },
       )();
     } catch (e) {
-      if (e instanceof ShortList) return e.list;
+      if (e instanceof ShortList) {
+        lastShort = { at: Date.now(), list: e.list };
+        return e.list;
+      }
       throw e;
     }
   });

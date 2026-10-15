@@ -147,12 +147,29 @@ export const REWARDS_BY_DATE_GROUPED = /* GraphQL */ `
 `;
 
 // Settled claims of the suppliers the owners own now, newest first (by height, then event_idx), over the whole
-// history, from the settlement catalog: only the fields the tab and the CSV use, and on every row the part of the
-// history the settlement tables cover (coveredFrom / coveredTo / coveredGaps; they can lag the indexed blocks). At most
-// $rowLimit rows (up to 1000); the next page passes the last row's height and eventIdx as $beforeHeight /
-// $beforeEventIdx, a keyset: a settlement indexed meanwhile cannot shift the rows as it does with OFFSET. supplierId is
-// the operator (node) address — the useful per-row identity across a fleet; supplierOwnerId is the owner the settlement
-// recorded, currentOwnerId the supplier's owner now.
+// history, from the settlement catalog. At most $rowLimit rows (up to 1000); the next page passes the last row's height
+// and event_idx as $beforeHeight / $beforeEventIdx, a keyset: a settlement indexed meanwhile cannot shift the rows as it
+// does with OFFSET. supplier_id is the operator (node) address — the useful per-row identity across a fleet;
+// supplier_owner_id is the owner the settlement recorded, current_owner_id the supplier's owner now.
+// The pager's page: {range, data}, which carries the covered part of the history (the settlement tables can lag the
+// indexed blocks) even when it has no rows, so a page is always one request. Snake-case keys, numbers as strings.
+export const OWNER_CLAIMS_PAGE = /* GraphQL */ `
+  query ownerClaimsPage($owners: [String], $rowLimit: Int, $beforeHeight: BigInt, $beforeEventIdx: Int) {
+    getClaimsJson(
+      suppliers: null
+      rangeStart: null
+      rangeEnd: null
+      owners: $owners
+      statuses: ["settled"]
+      rowLimit: $rowLimit
+      beforeHeight: $beforeHeight
+      beforeEventIdx: $beforeEventIdx
+    )
+  }
+`;
+
+// The export's page: the same rows as a list with only the fields the CSV writes (about half the bytes of the JSON
+// twin); the export needs no range.
 export const OWNER_CLAIMS = /* GraphQL */ `
   query ownerClaims($owners: [String], $rowLimit: Int, $beforeHeight: BigInt, $beforeEventIdx: Int) {
     getClaimsList(
@@ -174,18 +191,7 @@ export const OWNER_CLAIMS = /* GraphQL */ `
       supplierId
       supplierOwnerId
       currentOwnerId
-      coveredFrom
-      coveredTo
-      coveredGaps
     }
-  }
-`;
-
-// The part of the history the settlement tables cover, for an answer with no rows (which carries none): one row at
-// most of getClaimsJson, read for its range.
-export const OWNER_CLAIMS_RANGE = /* GraphQL */ `
-  query ownerClaimsRange($owners: [String]) {
-    getClaimsJson(suppliers: null, rangeStart: null, rangeEnd: null, owners: $owners, statuses: ["settled"], rowLimit: 1)
   }
 `;
 
@@ -305,10 +311,38 @@ export const SUPPLIER_MIN_STAKE = /* GraphQL */ `
   }
 `;
 
-// One page of slashing events of the operators' suppliers in [start, end), newest first (by height, then id): only the
-// fields the tab uses, and on every row the part of the window the indexed blocks cover. At most $rowLimit rows; the
-// next page passes the last row's height and id as $beforeHeight / $beforeId. stakeUpokt is the stake after the slash;
-// proofValidationStatus can be null.
+// Slashing events of the operators' suppliers in [start, end), newest first (by height, then id). At most $rowLimit
+// rows; the next page passes the last row's height and id as $beforeHeight / $beforeId.
+// The pager's page: {range, data}, which carries the part of the window the indexed blocks cover even when it has no
+// rows, so a page is always one request. Snake-case keys, numbers as strings; stake_upokt is the stake after the slash,
+// proof_validation_status can be null.
+export const SUPPLIER_SLASH_PAGE = /* GraphQL */ `
+  query supplierSlashPage(
+    $operators: [String]
+    $operatorScope: String
+    $start: Datetime
+    $end: Datetime
+    $rowLimit: Int
+    $beforeHeight: BigInt
+    $beforeId: String
+  ) {
+    getActorLifecycleJson(
+      kind: "supplier"
+      addresses: null
+      rangeStart: $start
+      rangeEnd: $end
+      operators: $operators
+      operatorScope: $operatorScope
+      events: ["slash"]
+      rowLimit: $rowLimit
+      beforeHeight: $beforeHeight
+      beforeId: $beforeId
+    )
+  }
+`;
+
+// The export's page: the same rows as a list with only the fields the CSV writes (and blockTime, for counting the
+// stretches the settlement tables do not cover); the export needs no range.
 export const SUPPLIER_SLASHES = /* GraphQL */ `
   query supplierSlashes(
     $operators: [String]
@@ -333,6 +367,7 @@ export const SUPPLIER_SLASHES = /* GraphQL */ `
     ) {
       height
       id
+      blockTime
       actorId
       penaltyUpokt
       previousStakeUpokt
@@ -340,33 +375,14 @@ export const SUPPLIER_SLASHES = /* GraphQL */ `
       proofValidationStatus
       serviceId
       applicationId
-      coveredFrom
-      coveredTo
-      coveredGaps
     }
-  }
-`;
-
-// The part of the window the indexed blocks cover, for a page with no rows (which carries none): one row at most of
-// getActorLifecycleJson, read for its range.
-export const SUPPLIER_SLASHES_RANGE = /* GraphQL */ `
-  query supplierSlashesRange($operators: [String], $operatorScope: String, $start: Datetime, $end: Datetime) {
-    getActorLifecycleJson(
-      kind: "supplier"
-      addresses: null
-      rangeStart: $start
-      rangeEnd: $end
-      operators: $operators
-      operatorScope: $operatorScope
-      events: ["slash"]
-      rowLimit: 1
-    )
   }
 `;
 
 // The range's slashing totals in one request: getSupplierPenaltiesJson (the settlement tables; rows of kind 'slashed',
 // one per reason, with events and slashed_upokt) for the part they cover, and the slashing events of the window's last
-// hour ($tailStart..$end), which the caller counts past the settlement tables' covered_to (they trail the indexed blocks).
+// hour ($tailStart..$end) with the part of it the indexed blocks cover, which the caller counts past the settlement
+// tables' covered_to (they trail the indexed blocks).
 export const SUPPLIER_SLASH_TOTALS = /* GraphQL */ `
   query supplierSlashTotals($operators: [String], $operatorScope: String, $start: Datetime!, $end: Datetime!, $tailStart: Datetime) {
     getSupplierPenaltiesJson(
@@ -377,7 +393,7 @@ export const SUPPLIER_SLASH_TOTALS = /* GraphQL */ `
       operators: $operators
       operatorScope: $operatorScope
     )
-    tail: getActorLifecycleList(
+    tail: getActorLifecycleJson(
       kind: "supplier"
       addresses: null
       rangeStart: $tailStart
@@ -386,9 +402,6 @@ export const SUPPLIER_SLASH_TOTALS = /* GraphQL */ `
       operatorScope: $operatorScope
       events: ["slash"]
       rowLimit: 1000
-    ) {
-      blockTime
-      penaltyUpokt
-    }
+    )
   }
 `;

@@ -90,7 +90,9 @@ export function useCursorPages<T extends CursorPage>(
 export function walkCheck(shown: string[][], page: number, keys: string[], hasNextPage: boolean, total?: number): { repeats: number; missed: number } {
   const earlier = new Set(shown.slice(0, page - 1).flat());
   const repeats = keys.filter((k) => earlier.has(k)).length;
-  const walked = shown.slice(0, page - 1).length === page - 1 && shown.slice(0, page - 1).every(Boolean);
+  // every earlier page recorded: an index loop, as every() skips the holes of a sparse array
+  let walked = true;
+  for (let i = 0; i < page - 1; i++) if (!shown[i]) walked = false;
   const distinct = new Set([...earlier, ...keys]).size;
   const missed = !hasNextPage && walked && typeof total === 'number' ? Math.max(0, total - distinct) : 0;
   return { repeats, missed };

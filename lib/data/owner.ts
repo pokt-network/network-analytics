@@ -8,7 +8,7 @@ import {
   REWARDS_BY_ADDRESS_DATE,
   REWARDS_BY_DATE_GROUPED,
   OWNER_CLAIMS,
-  OWNER_CLAIMS_RANGE,
+  OWNER_CLAIMS_PAGE,
   OWNER_SETTLED_CLAIMS,
 } from '@/lib/queries/analytics';
 import { num, parseScalar } from './_util';
@@ -148,7 +148,21 @@ export async function getOwnerSuppliers(
   return fetchOwnerSuppliers(addresses, filter, minStake, after, pageSize);
 }
 
-interface ClaimRaw {
+/** A claim as the pager's JSON page sends it (snake-case keys, numbers as strings). */
+interface ClaimJsonRaw {
+  height: string;
+  event_idx: string;
+  service_id: string;
+  relays: string;
+  settled_upokt: string;
+  relay_minted_upokt: string;
+  supplier_id: string;
+  supplier_owner_id: string | null;
+  current_owner_id: string | null;
+}
+
+/** A claim as the export's list page sends it. */
+interface ClaimListRaw {
   height: string;
   eventIdx: number;
   serviceId: string;
@@ -158,9 +172,6 @@ interface ClaimRaw {
   supplierId: string;
   supplierOwnerId: string | null;
   currentOwnerId: string | null;
-  coveredFrom: string | null;
-  coveredTo: string | null;
-  coveredGaps: Array<{ from: string | null; to: string | null }> | null;
 }
 
 export interface Issuance {
@@ -169,7 +180,7 @@ export interface Issuance {
   /** Operator (node) address — the supplier that settled this claim. */
   operator: string;
   /** Owner of that supplier now (what groups a fleet), or the one the settlement recorded where the current one could
-   *  not be read; '—' when neither is known. */
+   *  not be read; empty when neither is known. */
   owner: string;
   /** Which owner `owner` is: 'current' (now), 'settlement' (recorded at settlement) or 'unknown'. */
   ownerAsOf: 'settlement' | 'current' | 'unknown';
@@ -200,20 +211,33 @@ export async function getOwnerIssuances(
   after: string | null = null,
   lookahead = true,
 ): Promise<IssuancePage> {
+  if (after && !/^\d+:\d+$/.test(after)) throw new Error(`issuances: invalid cursor ${after}`);
   const [beforeHeight, beforeEventIdx] = after ? after.split(':') : [null, null];
   // the catalog returns at most 1000 rows a call
   const rowLimit = Math.min(lookahead ? pageSize + 1 : pageSize, 1000);
-  const data = await gqlFetch<{ getClaimsList: ClaimRaw[] | null }>(
-    NETWORK,
-    OWNER_CLAIMS,
-    { owners: addresses, rowLimit, beforeHeight, beforeEventIdx: beforeEventIdx == null ? null : Number(beforeEventIdx) },
-    { revalidate: 30 },
-  );
-  const all = data.getClaimsList ?? [];
-  // the covered part of the history: on every row; an answer with no rows asks for it on its own
-  const range: CoverageRange | null = all.length
-    ? { requested_from: null, requested_to: null, covered_from: all[0].coveredFrom, covered_to: all[0].coveredTo, gaps: all[0].coveredGaps ?? [], end_inclusive: false }
-    : unwrapRange<unknown>(parseScalar((await gqlFetch<{ getClaimsJson: unknown }>(NETWORK, OWNER_CLAIMS_RANGE, { owners: addresses }, { revalidate: 30 })).getClaimsJson), false).range;
+  const vars = { owners: addresses, rowLimit, beforeHeight, beforeEventIdx: beforeEventIdx == null ? null : Number(beforeEventIdx) };
+  let range: CoverageRange | null = null;
+  let all: ClaimListRaw[];
+  if (lookahead) {
+    // the pager: the JSON twin, whose range comes even with no rows (one request a page)
+    const data = await gqlFetch<{ getClaimsJson: unknown }>(NETWORK, OWNER_CLAIMS_PAGE, vars, { revalidate: 30 });
+    const page = unwrapRange<ClaimJsonRaw[]>(parseScalar(data.getClaimsJson), false);
+    range = page.range;
+    all = (page.data ?? []).map((n) => ({
+      height: n.height,
+      eventIdx: num(n.event_idx),
+      serviceId: n.service_id,
+      relays: n.relays,
+      settledUpokt: n.settled_upokt,
+      relayMintedUpokt: n.relay_minted_upokt,
+      supplierId: n.supplier_id,
+      supplierOwnerId: n.supplier_owner_id,
+      currentOwnerId: n.current_owner_id,
+    }));
+  } else {
+    // the export: the list with only the fields it writes
+    all = (await gqlFetch<{ getClaimsList: ClaimListRaw[] | null }>(NETWORK, OWNER_CLAIMS, vars, { revalidate: 30 })).getClaimsList ?? [];
+  }
   const page = all.slice(0, pageSize);
   const last = page[page.length - 1];
   return {
@@ -227,7 +251,8 @@ export async function getOwnerIssuances(
         block: num(n.height),
         serviceId: n.serviceId,
         operator: n.supplierId,
-        owner: n.currentOwnerId || n.supplierOwnerId || '—',
+        // empty when neither owner is known; Owner As Of then says 'unknown'
+        owner: n.currentOwnerId || n.supplierOwnerId || '',
         ownerAsOf: n.currentOwnerId ? 'current' : n.supplierOwnerId ? 'settlement' : 'unknown',
         settlementOwner: n.supplierOwnerId ?? '',
         relays: num(n.relays),

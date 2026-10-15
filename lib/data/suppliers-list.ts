@@ -10,7 +10,7 @@ const toPokt = (u: number) => u / UPOKT_PER_POKT;
 // the Operator tool's rev-share addresses as operators), largest stake first then by id, paged by keyset, with the count
 // in the same request.
 
-interface FleetRowRaw {
+export interface FleetRowRaw {
   supplierId: string;
   ownerId: string | null;
   stakeUpokt: string | number;
@@ -62,20 +62,30 @@ function compareDecimal(a: string | number, b: string | number): number {
 }
 
 /** A page from the rows asked for (pageSize + 1: the extra one tells whether another page follows). The function pages
- *  in its own order (stake desc, then id), which the keyset relies on, so a row out of that order fails the page instead
- *  of paging wrong. */
-function toPage(all: FleetRowRaw[], pageSize: number, totalCount: number): SupplierListPage {
-  for (let i = 1; i < all.length; i++) {
-    const c = compareDecimal(all[i - 1].stakeUpokt, all[i].stakeUpokt);
-    if (c < 0 || (c === 0 && all[i - 1].supplierId >= all[i].supplierId)) {
-      throw new Error('supplier list: rows out of the (stake desc, id) order the paging relies on');
+ *  in its own order (stake desc, then id), which the keyset relies on. A supplier that is restaking can be live in two
+ *  versions for a few seconds (the indexer writes the new one before the block closes the old one), so a supplier seen
+ *  twice keeps its first row only, whether the second has the same stake or another; only a strict inversion of the
+ *  order between two different suppliers fails the page. */
+export function toPage(all: FleetRowRaw[], pageSize: number, totalCount: number): SupplierListPage {
+  const seen = new Set<string>();
+  const rows: FleetRowRaw[] = [];
+  for (const r of all) {
+    if (seen.has(r.supplierId)) continue;
+    const prev = rows[rows.length - 1];
+    if (prev) {
+      const c = compareDecimal(prev.stakeUpokt, r.stakeUpokt);
+      if (c < 0 || (c === 0 && prev.supplierId > r.supplierId)) {
+        throw new Error('supplier list: rows out of the (stake desc, id) order the paging relies on');
+      }
     }
+    seen.add(r.supplierId);
+    rows.push(r);
   }
-  const page = all.slice(0, pageSize);
+  const page = rows.slice(0, pageSize);
   const last = page[page.length - 1];
   return {
     totalCount,
-    hasNextPage: all.length > pageSize,
+    hasNextPage: all.length > pageSize, // the raw rows: a dropped duplicate does not end the walk
     endCursor: last ? `${last.stakeUpokt}:${last.supplierId}` : null,
     rows: page.map((r) => ({
       operator: r.supplierId,
@@ -95,7 +105,6 @@ export async function fetchOwnerSuppliers(
   minStakeUpokt: number,
   after: string | null,
   pageSize: number,
-  revalidate = 1800,
 ): Promise<SupplierListPage> {
   const stakeStatuses = filter === 'all' ? null : filter === 'unstaking' ? ['Unstaking'] : filter === 'unstaked' ? ['Unstaked'] : ['Staked'];
   // "below min stake" = Staked and at or under the current minimum (the slash-risk nodes); the ceiling is exclusive and
@@ -105,7 +114,8 @@ export async function fetchOwnerSuppliers(
     NETWORK,
     OWNER_SUPPLIERS,
     { owners, stakeStatuses, rowLimit: pageSize + 1, ...ceiling, ...keysetArgs(after) },
-    { revalidate },
+    // no fetch cache: the route caches the processed page, so a page that fails to process is not kept
+    { cache: 'no-store' },
   );
   return toPage(data.rows ?? [], pageSize, num(data.count?.[0]?.supplierCount));
 }
@@ -116,13 +126,13 @@ export async function fetchOperatorSuppliers(
   operators: string[],
   after: string | null,
   pageSize: number,
-  revalidate = 1800,
 ): Promise<SupplierListPage> {
   const data = await gqlFetch<{ rows: FleetRowRaw[] | null; fleet: Array<{ supplierCount: string | number }> | null }>(
     NETWORK,
     OPERATOR_SUPPLIERS,
     { operators, rowLimit: pageSize + 1, ...keysetArgs(after) },
-    { revalidate },
+    // no fetch cache: the route caches the processed page, so a page that fails to process is not kept
+    { cache: 'no-store' },
   );
   return toPage(data.rows ?? [], pageSize, num(data.fleet?.[0]?.supplierCount));
 }

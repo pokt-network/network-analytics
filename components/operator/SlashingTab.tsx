@@ -15,7 +15,7 @@ import { toCsv, downloadCsv, csvFilename } from '@/lib/csv';
 
 const PAGE_SIZE = 25;
 const EXPORT_CAP = 5000;
-const EXPORT_CHUNK = 999; // the route's largest page
+const EXPORT_CHUNK = 1000; // the route's largest export page (lookahead=0: no extra row, stops at a short page)
 const EXPORT_MAX_CALLS = Math.ceil(EXPORT_CAP / EXPORT_CHUNK) + 1;
 
 // Supplier slashing events (proof-missing penalties) for the operator's suppliers, in the view's range. Paged by keyset
@@ -50,7 +50,7 @@ export function SlashingTab() {
     setExportNote(null);
     try {
       const { rows: all, complete } = await walkPages<SlashRow>(
-        (after, size) => `/api/operator/slashing?${query}&pageSize=${size}${after ? `&after=${encodeURIComponent(after)}` : ''}`,
+        (after, size) => `/api/operator/slashing?${query}&lookahead=0&pageSize=${size}${after ? `&after=${encodeURIComponent(after)}` : ''}`,
         EXPORT_CHUNK,
         EXPORT_CAP,
         EXPORT_MAX_CALLS,
