@@ -2,8 +2,7 @@ import { gqlFetch } from '@/lib/graphql';
 import { toDate } from '@/lib/time';
 import { UPOKT_PER_POKT } from '@/lib/config';
 import { NETWORK, type RangeKey } from '@/lib/app-config';
-import { rangeWindow, rangeTTL } from '@/lib/timeranges';
-import { rangeCacheKey } from '@/lib/cache-keys';
+import { rangeWindow, rangeTTL, WINDOW_BUCKET_MS } from '@/lib/timeranges';
 import {
   OPERATOR_CLAIMS_SETTLED,
   OPERATOR_CLAIM_PENALTIES,
@@ -281,6 +280,9 @@ export interface SlashPage extends SlashTotals {
   indexed: boolean;
   /** The part of the range the indexed blocks cover. */
   range: CoverageRange | null;
+  /** The minute (ms) the window ends at, chosen by the server for the first page: later pages of the same walk send it
+   *  back as `at`, so all of them (and the totals) read one window. */
+  at?: number;
 }
 
 const LIFECYCLE_ROW_LIMIT = 1000;
@@ -374,23 +376,23 @@ export async function getOperatorSlashTotals(addresses: string[], range: RangeKe
   return { totalCount: count, penaltyUpokt: sum.toString(), capped };
 }
 
-/** The slashing route's cache keys and the instant its window ends at. The window, in its 60 s bucket
- *  (rangeWindow's end), is part of both keys: a route serves a stale entry as it is, so keys with the range name alone
- *  would answer an old window after a quiet stretch. The page and totals functions read the window of that same `now`. */
+/** The slashing route's cache keys and the instant its window ends at: the minute of `at` (the server's clock for a
+ *  walk's first page, the pinned minute it hands back for the others), in both keys, and the window the page and totals
+ *  functions read, so a key always holds the window it names. */
 export function slashCacheKeys(
   addresses: string[],
   range: RangeKey,
   page: { after: string | null; pageSize: number; lookahead: boolean },
   at: number = Date.now(),
 ): { now: number; totals: string[]; page: string[] } {
-  // the 60 s bucket is the window's own minute (rangeWindow floors `now` to it)
+  // the window's minute, computed once: rangeWindow floors `now` to it, and both keys carry it
+  const now = Math.floor(at / WINDOW_BUCKET_MS) * WINDOW_BUCKET_MS;
   const ops = addresses.join(',');
-  const totals = rangeCacheKey(['operator-slash-totals', ops], range, 60, at);
-  const pageKey = rangeCacheKey(['operator-slash-page', ops], range, 60, at);
+  const minute = new Date(now).toISOString();
   return {
-    now: totals.now,
-    totals: totals.key,
-    page: [...pageKey.key, page.after ?? '', String(page.pageSize), page.lookahead ? 'pager' : 'export'],
+    now,
+    totals: ['operator-slash-totals', ops, range, minute],
+    page: ['operator-slash-page', ops, range, minute, page.after ?? '', String(page.pageSize), page.lookahead ? 'pager' : 'export'],
   };
 }
 

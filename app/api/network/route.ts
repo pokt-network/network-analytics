@@ -1,13 +1,12 @@
 import { type NextRequest } from 'next/server';
-import { unstable_cache } from 'next/cache';
-import { rangeCacheKey } from '@/lib/cache-keys';
+import { rangeCached } from '@/lib/window-cache';
 import { getSnapshots } from '@/lib/data/snapshots';
 import { getClaimProofs, type ClaimProofPoint } from '@/lib/data/claims';
 import { getSupplyHistory } from '@/lib/data/economy';
 import { rangeWindow, rangeTTL } from '@/lib/timeranges';
 import { DEFAULT_RANGE, isRangeKey, warmTag, type RangeKey } from '@/lib/app-config';
 import { UPOKT_PER_POKT } from '@/lib/config';
-import { diagJson, stamped } from '@/lib/diagnostics';
+import { diagJson } from '@/lib/diagnostics';
 
 export interface NetworkStats {
   stakedValidators: number;
@@ -27,12 +26,12 @@ export interface NetworkResponse {
   interval: 'hour' | 'day' | 'week';
 }
 
-async function buildNetwork(range: RangeKey): Promise<NetworkResponse> {
-  const w = rangeWindow(range);
+async function buildNetwork(range: RangeKey, now: number): Promise<NetworkResponse> {
+  const w = rangeWindow(range, now);
 
   const [snaps, claims, supply] = await Promise.all([
     getSnapshots(w.startISO, w.endISO, 3600),
-    getClaimProofs(range),
+    getClaimProofs(range, now),
     getSupplyHistory(w.startISO, w.endISO, 3600),
   ]);
   const latest = snaps.at(-1) ?? null;
@@ -76,9 +75,6 @@ export async function GET(req: NextRequest) {
   const rangeParam = req.nextUrl.searchParams.get('range');
   const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
   return diagJson('network', () =>
-    unstable_cache(stamped(() => buildNetwork(range)), rangeCacheKey(['network'], range, rangeTTL(range)).key, {
-      revalidate: rangeTTL(range),
-      tags: warmTag(range),
-    })(),
+    rangeCached(['network', 'w1'], range, rangeTTL(range), (now) => buildNetwork(range, now), warmTag(range)),
   );
 }

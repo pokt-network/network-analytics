@@ -1,10 +1,9 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { unstable_cache } from 'next/cache';
-import { rangeCacheKey } from '@/lib/cache-keys';
+import { rangeCached } from '@/lib/window-cache';
 import { getServiceDetail } from '@/lib/data/services';
 import { rangeTTL } from '@/lib/timeranges';
 import { DEFAULT_RANGE, isRangeKey, type RangeKey } from '@/lib/app-config';
-import { diagJson, stamped } from '@/lib/diagnostics';
+import { diagJson } from '@/lib/diagnostics';
 
 export async function GET(req: NextRequest) {
   const serviceId = req.nextUrl.searchParams.get('serviceId');
@@ -13,8 +12,6 @@ export async function GET(req: NextRequest) {
   const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
 
   return diagJson('service', () =>
-    unstable_cache(stamped(() => getServiceDetail(serviceId, range)), rangeCacheKey(['service', serviceId], range, rangeTTL(range)).key, {
-      revalidate: rangeTTL(range),
-    })(),
+    rangeCached(['service', 'w1', serviceId], range, rangeTTL(range), (now) => getServiceDetail(serviceId, range, now)),
   );
 }

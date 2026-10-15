@@ -27,8 +27,8 @@ export interface TrafficSeries {
   services: Array<{ id: string; total: number }>;
 }
 
-export async function getTrafficSeries(range: RangeKey): Promise<TrafficSeries> {
-  const w = rangeWindow(range);
+export async function getTrafficSeries(range: RangeKey, now?: number): Promise<TrafficSeries> {
+  const w = rangeWindow(range, now);
   const data = await gqlFetch<{ getRelaysByServicePerPointJson: unknown }>(
     NETWORK,
     RELAYS_BY_SERVICE_PER_POINT,
@@ -94,8 +94,8 @@ export interface ServicePerf {
   suppliersStaked: number;
 }
 
-export async function getServicesPerformance(range: RangeKey): Promise<ServicePerf[]> {
-  const w = rangeWindow(range);
+export async function getServicesPerformance(range: RangeKey, now?: number): Promise<ServicePerf[]> {
+  const w = rangeWindow(range, now);
   const data = await gqlFetch<{ servicesPerformanceBetweenTimes: unknown }>(
     NETWORK,
     SERVICES_PERFORMANCE,

@@ -1,10 +1,9 @@
 import { type NextRequest } from 'next/server';
-import { unstable_cache } from 'next/cache';
-import { rangeCacheKey } from '@/lib/cache-keys';
+import { rangeCached } from '@/lib/window-cache';
 import { getServicesPerformance } from '@/lib/data/traffic';
 import { rangeTTL } from '@/lib/timeranges';
 import { DEFAULT_RANGE, isRangeKey, warmTag, type RangeKey } from '@/lib/app-config';
-import { diagJson, stamped } from '@/lib/diagnostics';
+import { diagJson } from '@/lib/diagnostics';
 
 // Per-service analytics for the Services tab top-level table: staked-supplier count + windowed CU
 // (both from servicesPerformanceBetweenTimes). Range-dependent — the CU total follows the pills.
@@ -21,9 +20,12 @@ export async function GET(req: NextRequest) {
   const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
 
   return diagJson('services-analytics', () =>
-    unstable_cache(
-      stamped(async () => {
-        const perf = await getServicesPerformance(range);
+    rangeCached(
+      ['services-analytics', 'w1'],
+      range,
+      rangeTTL(range),
+      async (now) => {
+        const perf = await getServicesPerformance(range, now);
         const services = perf.map((p) => ({
           id: p.serviceId,
           name: p.serviceName || p.serviceId,
@@ -32,9 +34,8 @@ export async function GET(req: NextRequest) {
           relays: p.estimatedRelays,
         })) satisfies ServiceAnalyticsRow[];
         return { services };
-      }),
-      rangeCacheKey(['services-analytics'], range, rangeTTL(range)).key,
-      { revalidate: rangeTTL(range), tags: warmTag(range) },
-    )(),
+      },
+      warmTag(range),
+    ),
   );
 }

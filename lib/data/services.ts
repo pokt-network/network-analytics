@@ -80,8 +80,8 @@ export interface ServiceDetail {
   series: ServiceVolumePoint[];
 }
 
-async function getServiceVolume(serviceId: string, range: RangeKey): Promise<{ series: ServiceVolumePoint[]; grossRewardsPokt: number }> {
-  const w = rangeWindow(range);
+async function getServiceVolume(serviceId: string, range: RangeKey, now?: number): Promise<{ series: ServiceVolumePoint[]; grossRewardsPokt: number }> {
+  const w = rangeWindow(range, now);
   const data = await gqlFetch<{ getRelaysByServicePerPointJson: unknown }>(
     NETWORK,
     RELAYS_BY_SERVICE_PER_POINT,
@@ -103,8 +103,8 @@ async function getServiceVolume(serviceId: string, range: RangeKey): Promise<{ s
   return { series, grossRewardsPokt: grossUpokt / UPOKT_PER_POKT };
 }
 
-export async function getServiceDetail(serviceId: string, range: RangeKey): Promise<ServiceDetail> {
-  const [perf, volume] = await Promise.all([getServicesPerformance(range), getServiceVolume(serviceId, range)]);
+export async function getServiceDetail(serviceId: string, range: RangeKey, now?: number): Promise<ServiceDetail> {
+  const [perf, volume] = await Promise.all([getServicesPerformance(range, now), getServiceVolume(serviceId, range, now)]);
   const p = perf.find((x) => x.serviceId === serviceId);
   return {
     info: {

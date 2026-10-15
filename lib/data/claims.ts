@@ -34,8 +34,8 @@ export interface ClaimProofPoint {
   expiredEstCU: number;
 }
 
-export async function getClaimProofs(range: RangeKey): Promise<ClaimProofPoint[]> {
-  const w = rangeWindow(range);
+export async function getClaimProofs(range: RangeKey, now?: number): Promise<ClaimProofPoint[]> {
+  const w = rangeWindow(range, now);
   const data = await gqlFetch<{ getClaimProofsDataByTime: unknown }>(
     NETWORK,
     CLAIM_PROOFS_BY_TIME,

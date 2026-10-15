@@ -4,8 +4,8 @@ import { fileURLToPath } from 'node:url';
 const root = new URL('../', import.meta.url);
 
 export async function resolve(specifier, context, next) {
-  // next ships no exports map: Node's ESM resolver needs the file (the bundler resolves `next/cache` itself)
-  if (specifier === 'next/cache') return next('next/cache.js', context);
+  // next ships no exports map: Node's ESM resolver needs the file (the bundler resolves `next/cache` and the like itself)
+  if (/^next\/[a-z-]+$/.test(specifier)) return next(`${specifier}.js`, context);
   const url = specifier.startsWith('@/')
     ? new URL(specifier.slice(2), root)
     : specifier.startsWith('.') && context.parentURL

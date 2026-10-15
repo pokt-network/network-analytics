@@ -11,6 +11,13 @@ interface CursorPage {
   endCursor?: string | null;
   rows?: unknown[];
   totalCount?: number;
+  /** A windowed route's pinned minute: the first page returns it, the walk's later pages send it back as `at`. */
+  at?: number;
+}
+
+/** The url of a page after the first: the cursor it starts after, and the window pin of the walk when the route gave one. */
+export function cursorPageUrl(baseUrl: string, cursor: string, pin?: number | null): string {
+  return `${baseUrl}&after=${encodeURIComponent(cursor)}${pin != null ? `&at=${pin}` : ''}`;
 }
 
 /**
@@ -31,6 +38,7 @@ export function useCursorPages<T extends CursorPage>(
 ) {
   const [page, setPage] = useState(1);
   const [cursors, setCursors] = useState<string[]>([]); // cursors[i]: the endCursor page i + 2 starts after
+  const [pin, setPin] = useState<number | null>(null); // the window the first page was read at (windowed routes)
   const [shown, setShown] = useState<string[][]>([]); // shown[i]: the row keys page i + 1 showed
   const [prevKey, setPrevKey] = useState(resetKey);
   if (prevKey !== resetKey) {
@@ -38,10 +46,11 @@ export function useCursorPages<T extends CursorPage>(
     setPage(1);
     setCursors([]);
     setShown([]);
+    setPin(null);
   }
   const cursor = page > 1 ? cursors[page - 2] : null;
   const missing = page > 1 && !cursor;
-  const url = !baseUrl || missing ? '' : cursor ? `${baseUrl}&after=${encodeURIComponent(cursor)}` : baseUrl;
+  const url = !baseUrl || missing ? '' : cursor ? cursorPageUrl(baseUrl, cursor, pin) : baseUrl;
   const d = useTabData<T>(url, opts);
   const current = !!url && d.url === url && !d.loading;
   const nextCursor = current && d.data?.hasNextPage ? (d.data.endCursor ?? null) : null;
@@ -75,6 +84,8 @@ export function useCursorPages<T extends CursorPage>(
     canNext: !!nextCursor,
     next: () => {
       if (!nextCursor) return;
+      // the walk keeps the window its first page was read at
+      if (page === 1) setPin(typeof d.data?.at === 'number' ? d.data.at : null);
       setCursors((c) => [...c.slice(0, page - 1), nextCursor]);
       setPage(page + 1);
     },
@@ -116,11 +127,15 @@ export async function walkPages<R>(
 ): Promise<{ rows: R[]; complete: boolean }> {
   const rows: R[] = [];
   let after: string | null = null;
+  // a windowed route pins the window with its first page (`at`): every later page and the probe send it back
+  let pin: number | null = null;
+  const url = (a: string | null, size: number) => `${pageUrl(a, size)}${pin != null ? `&at=${pin}` : ''}`;
   for (let calls = 0; calls < maxCalls && rows.length < cap; calls++) {
     // the last call asks only for what the cap still needs
-    const res = await fetch(pageUrl(after, Math.min(chunk, cap - rows.length)));
+    const res = await fetch(url(after, Math.min(chunk, cap - rows.length)));
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = (await res.json()) as CursorPage & { rows: R[] };
+    if (calls === 0 && typeof data.at === 'number') pin = data.at;
     rows.push(...data.rows);
     if (!data.hasNextPage) return { rows, complete: true };
     if (!data.endCursor) throw new Error('a page says more rows follow but carries no cursor');
@@ -129,7 +144,7 @@ export async function walkPages<R>(
   if (probeAtCap && rows.length >= cap && after) {
     // a failed probe keeps the rows read: the walk is then just not known to be complete
     try {
-      const res = await fetch(pageUrl(after, 1));
+      const res = await fetch(url(after, 1));
       if (res.ok) return { rows, complete: ((await res.json()) as { rows: R[] }).rows.length === 0 };
     } catch {
       /* the rows stand; completeness unknown */
@@ -137,10 +152,4 @@ export async function walkPages<R>(
     return { rows, complete: false };
   }
   return { rows, complete: false };
-}
-
-/** The page url builder of an export walk over a windowed route: every page and the probe carry the same `at`, the
- *  minute the walk pinned its window to when it started, so a walk that crosses a minute does not move its window. */
-export function pinnedPageUrl(base: string, at: number): (after: string | null, size: number) => string {
-  return (after, size) => `${base}&lookahead=0&at=${at}&pageSize=${size}${after ? `&after=${encodeURIComponent(after)}` : ''}`;
 }

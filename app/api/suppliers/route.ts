@@ -1,13 +1,12 @@
 import { type NextRequest } from 'next/server';
-import { unstable_cache } from 'next/cache';
-import { rangeCacheKey } from '@/lib/cache-keys';
+import { rangeCached } from '@/lib/window-cache';
 import { getSnapshots } from '@/lib/data/snapshots';
 import { getDomainTable, type DomainRow } from '@/lib/data/suppliers';
 import { getServicesPerformance } from '@/lib/data/traffic';
 import { rangeWindow, rangeTTL } from '@/lib/timeranges';
 import { DEFAULT_RANGE, isRangeKey, warmTag, type RangeKey } from '@/lib/app-config';
 import { UPOKT_PER_POKT } from '@/lib/config';
-import { diagJson, stamped } from '@/lib/diagnostics';
+import { diagJson } from '@/lib/diagnostics';
 
 export interface SupplierStats {
   totalSuppliers: number;
@@ -35,13 +34,13 @@ export interface SuppliersResponse {
   interval: 'hour' | 'day' | 'week';
 }
 
-async function buildSuppliers(range: RangeKey): Promise<SuppliersResponse> {
-  const w = rangeWindow(range);
+async function buildSuppliers(range: RangeKey, now: number): Promise<SuppliersResponse> {
+  const w = rangeWindow(range, now);
 
   const [snaps, domains, perf] = await Promise.all([
     getSnapshots(w.startISO, w.endISO, 3600),
     getDomainTable(),
-    getServicesPerformance(range),
+    getServicesPerformance(range, now),
   ]);
   const latest = snaps.at(-1) ?? null;
   const first = snaps[0] ?? null;
@@ -93,13 +92,10 @@ export async function GET(req: NextRequest) {
   const rangeParam = req.nextUrl.searchParams.get('range');
   const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
   // Suppliers change slowly and the per-domain stats are heavy → cache long, warmer keeps it fresh.
-  // NOTE: bump the cache-key version (`sup-v2`) whenever the SupplierStats/evolution payload shape
+  // NOTE: bump the cache-key version (`sup-v3`) whenever the SupplierStats/evolution payload shape
   // changes. The Vercel Data Cache persists across deploys, so without a new key a new deployment
   // would serve old-shaped entries to new client code (→ runtime crash on the missing fields).
   return diagJson('suppliers', () =>
-    unstable_cache(stamped(() => buildSuppliers(range)), rangeCacheKey(['suppliers', 'sup-v2'], range, rangeTTL(range)).key, {
-      revalidate: rangeTTL(range),
-      tags: warmTag(range),
-    })(),
+    rangeCached(['suppliers', 'sup-v3'], range, rangeTTL(range), (now) => buildSuppliers(range, now), warmTag(range)),
   );
 }

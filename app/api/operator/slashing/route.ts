@@ -32,12 +32,19 @@ export async function GET(req: NextRequest) {
   // present but empty or malformed is an error, never read as the first page.
   const after = req.nextUrl.searchParams.get('after');
   if (after !== null && !CURSOR_RE.test(after)) return NextResponse.json({ error: 'invalid after cursor' }, { status: 400 });
-  // at=<ms>: the instant an export walk pinned its window to, so every page of the walk (and its probe) reads the same
-  // window; a whole minute, at most an hour old (each value is a cache key)
+  // The window is pinned by the SERVER: a walk's first page (no `at`) takes the current minute and returns it as `at`;
+  // its later pages and the export's probe send that `at` back, so the whole walk reads one window. An `at` is accepted
+  // only as a whole minute that has already started and is at most an hour old (each value is a cache key; a browser
+  // clock plays no part).
+  const now = Date.now();
   const atParam = req.nextUrl.searchParams.get('at');
-  const at = atParam === null ? null : Number(atParam);
-  if (at !== null && !(/^\d+$/.test(atParam!) && at % 60_000 === 0 && at <= Date.now() + 60_000 && at >= Date.now() - 3_600_000)) {
-    return NextResponse.json({ error: 'invalid at' }, { status: 400 });
+  let at = now;
+  if (atParam !== null) {
+    const v = Number(atParam);
+    if (!(/^\d+$/.test(atParam) && v % 60_000 === 0 && v <= now && v >= now - 3_600_000)) {
+      return NextResponse.json({ error: 'This page belongs to a window that is over an hour old or invalid: start again from page 1.' }, { status: 400 });
+    }
+    at = v;
   }
 
   if (addresses.length === 0) {
@@ -45,8 +52,8 @@ export async function GET(req: NextRequest) {
       rows: [], hasNextPage: false, endCursor: null, indexed: true, range: null, totalCount: 0, penaltyUpokt: '0', capped: false,
     } satisfies SlashPage);
   }
-  // both keys carry the window's 60 s bucket (slashCacheKeys), and the functions read that same window
-  const keys = slashCacheKeys(addresses, range, { after, pageSize, lookahead }, at ?? Date.now());
+  // both keys carry the pinned minute (slashCacheKeys), and the functions read that same window
+  const keys = slashCacheKeys(addresses, range, { after, pageSize, lookahead }, at);
   const [totals, page] = await Promise.all([
     // 60 s: the key changes with the window's 60 s bucket, so a longer TTL would never be reached
     unstable_cache(() => getOperatorSlashTotals(addresses, range, keys.now), keys.totals, { revalidate: 60 })(),
@@ -54,5 +61,5 @@ export async function GET(req: NextRequest) {
     // not kept (the reads use no fetch cache)
     unstable_cache(() => getOperatorSlashPage(addresses, range, pageSize, after, lookahead, keys.now), keys.page, { revalidate: 60 })(),
   ]);
-  return NextResponse.json({ ...page, ...totals } satisfies SlashPage);
+  return NextResponse.json({ ...page, ...totals, at: keys.now } satisfies SlashPage);
 }

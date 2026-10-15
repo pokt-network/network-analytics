@@ -1,13 +1,12 @@
 import { type NextRequest } from 'next/server';
-import { unstable_cache } from 'next/cache';
-import { rangeCacheKey } from '@/lib/cache-keys';
+import { rangeCached } from '@/lib/window-cache';
 import { getTrafficSeries, getServicesPerformance, type TrafficSeries, type ServicePerf } from '@/lib/data/traffic';
 import { getCachedRolling24hStats, type Rolling24h } from '@/lib/data/rewards';
 import { getLatestSnapshot } from '@/lib/data/snapshots';
 import { getServicesCount } from '@/lib/data/services-meta';
 import { rangeTTL } from '@/lib/timeranges';
 import { DEFAULT_RANGE, isRangeKey, warmTag, type RangeKey } from '@/lib/app-config';
-import { diagJson, restamp, stamped } from '@/lib/diagnostics';
+import { diagJson, restamp } from '@/lib/diagnostics';
 
 export interface TrafficStats extends Rolling24h {
   activeServices: number;
@@ -33,12 +32,12 @@ export interface TrafficResponse {
   donut: DonutSlice[];
 }
 
-async function buildTraffic(range: RangeKey): Promise<TrafficBase> {
+async function buildTraffic(range: RangeKey, now: number): Promise<TrafficBase> {
   // Everything here is range-dependent, so it is safe to cache under the range key. The 24h stat
   // cards are a fixed rolling window (brief §5.1) and are deliberately NOT built here — see GET.
   const [series, performance, snapshot, totalServices] = await Promise.all([
-    getTrafficSeries(range),
-    getServicesPerformance(range),
+    getTrafficSeries(range, now),
+    getServicesPerformance(range, now),
     getLatestSnapshot(),
     getServicesCount(),
   ]);
@@ -73,10 +72,7 @@ export async function GET(req: NextRequest) {
   // with each other. Merged here, both surfaces read one entry and cannot drift apart.
   return diagJson('traffic', async () => {
     const [cached, rolling] = await Promise.all([
-      unstable_cache(stamped(() => buildTraffic(range)), rangeCacheKey(['traffic'], range, rangeTTL(range)).key, {
-        revalidate: rangeTTL(range),
-        tags: warmTag(range),
-      })(),
+      rangeCached(['traffic', 'w1'], range, rangeTTL(range), (now) => buildTraffic(range, now), warmTag(range)),
       getCachedRolling24hStats(),
     ]);
     const payload: TrafficResponse = { ...cached.data, stats: { ...cached.data.stats, ...rolling } };

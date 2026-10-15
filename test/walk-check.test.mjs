@@ -74,10 +74,11 @@ test('a failed probe at the cap keeps the rows read, as not known to be complete
   }
 });
 
-test('an export walk pins its window once: every page and the probe carry the same at', async () => {
-  const { walkPages, pinnedPageUrl } = await import('../lib/cursor-pages.ts');
+test('the server pins the window with the first page; every later page and the probe send it back', async () => {
+  const { walkPages } = await import('../lib/cursor-pages.ts');
   const realFetch = globalThis.fetch;
   const urls = [];
+  const SERVER_AT = Date.parse('2026-10-15T12:07:00Z');
   globalThis.fetch = async (url) => {
     urls.push(url);
     const q = new URL(url, 'http://x').searchParams;
@@ -85,16 +86,24 @@ test('an export walk pins its window once: every page and the probe carry the sa
     const after = Number(q.get('after') ?? 0);
     const n = Math.max(0, Math.min(size, 5000 - after));
     const rows = Array.from({ length: n }, (_, i) => after + i);
-    return new Response(JSON.stringify({ rows, hasNextPage: n === size, endCursor: n ? String(after + n) : null }), { status: 200 });
+    // the first page (no at) gets the server's minute; the others answer for the at they were given
+    const at = q.get('at') ? Number(q.get('at')) : SERVER_AT;
+    return new Response(JSON.stringify({ rows, hasNextPage: n === size, endCursor: n ? String(after + n) : null, at }), { status: 200 });
   };
   try {
-    const at = Date.parse('2026-10-15T12:07:00Z');
-    const walk = await walkPages(pinnedPageUrl('/api/operator/slashing?addresses=a&range=60d', at), 1000, 5000, 6, true);
+    const walk = await walkPages((after, size) => `/api/operator/slashing?range=60d&lookahead=0&pageSize=${size}${after ? `&after=${after}` : ''}`, 1000, 5000, 6, true);
     assert.equal(walk.rows.length, 5000);
     assert.equal(walk.complete, true);
     assert.equal(urls.length, 6); // 5 pages + the probe
-    assert.deepEqual([...new Set(urls.map((u) => new URL(u, 'http://x').searchParams.get('at')))], [String(at)]);
+    assert.equal(new URL(urls[0], 'http://x').searchParams.get('at'), null, 'the first page lets the server choose');
+    assert.deepEqual([...new Set(urls.slice(1).map((u) => new URL(u, 'http://x').searchParams.get('at')))], [String(SERVER_AT)]);
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+test('the pager url of a later page carries the cursor and, for a windowed route, the first page\'s pin', async () => {
+  const { cursorPageUrl } = await import('../lib/cursor-pages.ts');
+  assert.equal(cursorPageUrl('/api/x?a=1', '963:abc-finalize_block-1', 1760530020000), '/api/x?a=1&after=963%3Aabc-finalize_block-1&at=1760530020000');
+  assert.equal(cursorPageUrl('/api/x?a=1', '60010000000:pokt1a'), '/api/x?a=1&after=60010000000%3Apokt1a');
 });

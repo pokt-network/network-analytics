@@ -5,7 +5,7 @@ import { IconReceipt, IconDownload } from '@tabler/icons-react';
 import { EXPLORER_BASE_URL } from '@/lib/app-config';
 import { UPOKT_PER_POKT } from '@/lib/config';
 import { useStakingTool } from '@/components/staking/StakingToolContext';
-import { pinnedPageUrl, useCursorPages, walkPages } from '@/lib/cursor-pages';
+import { useCursorPages, walkPages } from '@/lib/cursor-pages';
 import type { SlashPage, SlashRow } from '@/lib/data/operator';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { ChartSkeleton, EmptyState } from '@/components/ui/states';
@@ -50,8 +50,8 @@ export function SlashingTab() {
     setExportNote(null);
     try {
       const { rows: all, complete } = await walkPages<SlashRow>(
-        // the window is pinned once, at the start: every page and the probe read the same one
-        pinnedPageUrl(`/api/operator/slashing?${query}`, Math.floor(Date.now() / 60_000) * 60_000),
+        // the server pins the window with the first page; walkPages sends it back with every later page and the probe
+        (after, size) => `/api/operator/slashing?${query}&lookahead=0&pageSize=${size}${after ? `&after=${encodeURIComponent(after)}` : ''}`,
         EXPORT_CHUNK,
         EXPORT_CAP,
         EXPORT_MAX_CALLS,
@@ -74,7 +74,7 @@ export function SlashingTab() {
       setExportNote(
         complete
           ? `Exported all ${formatNumber(rows.length)} slashing events.`
-          : `Exported the ${formatNumber(rows.length)} most recent of ${atLeast}${formatNumber(totalCount)} slashing events — the export is capped for performance.`,
+          : `Exported the ${formatNumber(rows.length)} most recent slashing events — the export is capped for performance.`,
       );
     } catch {
       setExportNote('Export failed — please try again.');
