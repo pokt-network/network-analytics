@@ -3,7 +3,6 @@
 // Managed by scripts/sync-vendor.mjs. Edit upstream in the explorer repo, then re-sync.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { unstable_cache } from 'next/cache';
 import { getNetwork, type NetworkId } from './networks';
 import { DataError } from './errors';
 
@@ -39,6 +38,9 @@ export async function gqlFetch<T>(
   if (opts.cache || (opts.revalidate !== false && typeof opts.revalidate !== 'number')) {
     return postGraphql<T>(network, query, variables, opts.cache, opts.signal);
   }
+  // loaded here, on the server-only path: a client component that imports gqlFetch (live polling, no-store) does not
+  // pull Next's cache runtime into its bundle
+  const { unstable_cache } = await import('next/cache');
   const cached = unstable_cache(
     (n: NetworkId, q: string, v: Record<string, unknown> | null) => postGraphql<T>(n, q, v ?? undefined, 'no-store', opts.signal),
     ['gqlFetch'],
