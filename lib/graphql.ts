@@ -3,7 +3,7 @@
 // Managed by scripts/sync-vendor.mjs. Edit upstream in the explorer repo, then re-sync.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// DIVERGES from pnf-explorer feat/closed-schema 4107d66 in two places. First: reads in flight OUTSIDE a React render
+// DIVERGES from pnf-explorer feat/closed-schema 8fe9f74 in three places. First: reads in flight OUTSIDE a React render
 // (this app's route handlers, which are all dynamic) share one process-wide map (`inflightReads`). pnf-explorer shares
 // only within a render, where a joiner would not register its revalidate on a prerendered route; here every gqlFetch
 // call runs in a dynamic route handler, where React's `cache` gives a new map on every call, so nothing would be
@@ -11,8 +11,10 @@
 // this map, three without it (as many as the old fetch cache made). Second: a cached answer read more than its
 // revalidate ago is returned at once and read again after the response (`refreshAfter`), where unstable_cache's own
 // background read would hold a route handler's response until it finished. Its entries carry when they were read (key
-// part 'read-at'). Both are kept here only; a re-sync from pnf-explorer would drop them, so scripts/sync-vendor.mjs
-// leaves this file alone.
+// part 'read-at'). Third, which the second makes possible: while a failed read is held, a request that has a cached
+// answer gets that answer (and no read is made until the hold ends), where pnf-explorer throws the held error; only a
+// cache miss throws it. All three are kept here only; a re-sync from pnf-explorer would drop them, so scripts/sync-
+// vendor.mjs leaves this file alone.
 
 import { cache } from 'react';
 import { getNetwork, type NetworkId } from './networks';
@@ -21,7 +23,7 @@ import { DataError } from './errors';
 export type RevalidateOpt = number | false;
 
 export interface GqlOptions {
-  /** ISR revalidate seconds, or `false` for immutable/force-cache (§3). Server-side only. */
+  /** ISR revalidate seconds, or `false` for immutable data, cached for good (§3). Server-side only. */
   revalidate?: RevalidateOpt;
   /** Override fetch cache mode (e.g. 'no-store' for client polling / live heartbeat). */
   cache?: RequestCache;
@@ -41,10 +43,10 @@ export interface GqlOptions {
  * `res.status === 200` before the body is read), so a cached fetch kept that error for its whole TTL — for good with
  * `revalidate: false`. Here the request goes out with no fetch cache inside `unstable_cache`, which stores a result
  * only once its callback has returned: a callback that throws (errors in the body, a non-2xx status, a network error)
- * stores nothing, and the next call asks again. One request per cache miss, as before. An answer whose only errors are
- * on `partial` fields is returned to the caller but not cached as the answer: it is held apart for at most 15 s, so a
- * field that keeps failing costs one request per 15 s window (see heldPartial). Outside a Next server (a script, a unit
- * test) there is no cache to keep it in, and the call goes straight out.
+ * stores nothing. One request per cache miss, as before. An answer whose only errors are on `partial` fields is returned
+ * to the caller but not cached either. A failed or partial answer is held for 15 s per process and then asked again, so a
+ * read that keeps failing costs one request per 15 s window (see holds). Outside a Next server (a script, a unit test)
+ * there is no cache to keep it in, and the call goes straight out.
  */
 export async function gqlFetch<T>(
   network: NetworkId,
@@ -90,16 +92,26 @@ async function cachedRead<T>(network: NetworkId, query: string, variables: Recor
   // loaded here, on the server-only path: a client component that imports gqlFetch (live polling, no-store) does not
   // pull Next's cache runtime into its bundle
   const { unstable_cache } = await import('next/cache');
-  if (opts.partial) {
-    const held = await heldPartial<T>(unstable_cache, network, query, variables);
-    if (held !== undefined) return held;
-  }
+  const holdKey = JSON.stringify([network, query, variables ?? null, opts.partial ?? null]);
+  const held = activeHold(holdKey);
+  if (held?.kind === 'partial') return held.data as T;
   // The request's abort signal, dropped by a refresh that runs after the response (the request may be gone by then).
   let signal = opts.signal;
-  const read = async (n: NetworkId, q: string, v: Record<string, unknown> | null): Promise<ReadAnswer<T>> => ({
-    readAt: Date.now(),
-    data: complete(await postGraphql<T>(n, q, v ?? undefined, 'no-store', signal), opts.partial),
-  });
+  const read = async (n: NetworkId, q: string, v: Record<string, unknown> | null): Promise<ReadAnswer<T>> => {
+    // A held error is thrown only where there is no answer to serve: a cache miss lands here, a cached answer does not.
+    const error = activeHold(holdKey);
+    if (error?.kind === 'error') throw new DataError(error.error.message, error.error.kind, error.error.status, error.error.denyReason);
+    try {
+      const data = complete(await postGraphql<T>(n, q, v ?? undefined, 'no-store', signal), opts.partial);
+      holds.delete(holdKey);
+      return { readAt: Date.now(), data };
+    } catch (e) {
+      // Held here, in the callback, because a stale entry is revalidated in the background, where Next swallows the
+      // throw: without the hold every request would ask again. An aborted call says nothing about the indexer.
+      if (!signal?.aborted) hold(holdKey, e);
+      throw e;
+    }
+  };
   // One entry per read and policy; `revalidate` only decides whether unstable_cache sees the entry stale.
   const entry = (revalidate: RevalidateOpt) =>
     unstable_cache(
@@ -117,6 +129,8 @@ async function cachedRead<T>(network: NetworkId, query: string, variables: Recor
     // unstable_cache's own background read would hold a route handler's response until it finished.
     const got = await entry(ONE_YEAR_S);
     if (Date.now() - got.readAt <= ttl * 1000) return got.data;
+    // a failed read of it is held: the last good answer is served, and read again once the hold ends
+    if (activeHold(holdKey)) return got.data;
     const id = JSON.stringify([network, query, variables ?? null, ttl]);
     // The entry was read more than one TTL ago, so a read at half the TTL sees it stale and reads it again in the
     // background, which Next awaits after the callbacks; stored with that half TTL as its own revalidate.
@@ -127,8 +141,8 @@ async function cachedRead<T>(network: NetworkId, query: string, variables: Recor
     // outside a request there is no after(): unstable_cache's own rule, which reads it again before answering there
     return scheduled ? got.data : (await entry(ttl)).data;
   } catch (e) {
-    // A partial answer reaches its caller, and is held only for the rest of its window.
-    if (e instanceof PartialAnswer) return (await heldPartial<T>(unstable_cache, network, query, variables, e.data as T)) ?? (e.data as T);
+    // A partial answer reaches its caller (and is held, above).
+    if (e instanceof PartialAnswer) return e.data as T;
     if (noIncrementalCache(e)) {
       return settle(await postGraphql<T>(network, query, variables, 'no-store', opts.signal), opts.partial);
     }
@@ -158,41 +172,32 @@ async function refreshAfter(id: string, refresh: () => Promise<void>): Promise<b
   }
 }
 
+/** The hold on this read, if its window has not ended (an ended one is dropped). */
+function activeHold(key: string) {
+  const held = holds.get(key);
+  if (held && held.until > Date.now()) return held;
+  if (held) holds.delete(key);
+  return undefined;
+}
+
 const noIncrementalCache = (e: unknown) => e instanceof Error && e.message.startsWith('Invariant: incrementalCache missing');
 
-/** How long a partial answer is served again: a field that keeps failing costs one request per window, not per render. */
-const PARTIAL_WINDOW_S = 15;
-
-class NotHeld extends Error {}
+/** How long a failed or partial answer is served again: a read that keeps failing costs one request per window, not per render. */
+const HOLD_MS = 15_000;
 
 /**
- * The partial answer held for this read in the current window, if any; given `data`, holds it (unless one is held already,
- * which is returned instead). Its own entry, apart from the complete answers: the key carries the window's number, so the
- * next window misses and asks the indexer again, and the entry outlives its window (revalidate 2 windows), so Next never
- * serves it stale. Looking up stores nothing: the callback throws when there is nothing to hold. One callback text for
- * both uses, since unstable_cache keys on it.
+ * Failed and partial answers by read (network, query, variables, partial), each until its window ends. Per process and
+ * apart from unstable_cache, so the cache stores only complete answers and a held answer registers no revalidate on the
+ * route. Within the window an error is thrown again even where a stale complete answer is cached: an error page for at
+ * most 15 s, where the fetch cache served the error for the read's whole TTL.
  */
-async function heldPartial<T>(
-  unstable_cache: typeof import('next/cache').unstable_cache,
-  network: NetworkId,
-  query: string,
-  variables: Record<string, unknown> | undefined,
-  data?: T,
-): Promise<T | undefined> {
-  const held = unstable_cache(
-    async (...key: [NetworkId, string, Record<string, unknown> | null, number]) => {
-      if (data === undefined) throw new NotHeld(`No partial answer held in window ${key[3]}`);
-      return data;
-    },
-    ['gqlFetch', 'partial'],
-    { revalidate: 2 * PARTIAL_WINDOW_S },
-  );
-  try {
-    return await held(network, query, variables ?? null, Math.floor(Date.now() / (PARTIAL_WINDOW_S * 1000)));
-  } catch (e) {
-    if (e instanceof NotHeld || noIncrementalCache(e)) return undefined;
-    throw e;
-  }
+const holds = new Map<string, { until: number } & ({ kind: 'partial'; data: unknown } | { kind: 'error'; error: DataError })>();
+
+function hold(key: string, e: unknown) {
+  const now = Date.now();
+  for (const [k, h] of holds) if (h.until <= now) holds.delete(k);
+  if (e instanceof PartialAnswer) holds.set(key, { until: now + HOLD_MS, kind: 'partial', data: e.data });
+  else if (e instanceof DataError) holds.set(key, { until: now + HOLD_MS, kind: 'error', error: e });
 }
 
 type GqlError = { message: string; path?: (string | number)[] };

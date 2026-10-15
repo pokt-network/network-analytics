@@ -42,8 +42,9 @@ const MANIFEST = [
 const DIVERGED = {
   'lib/graphql.ts':
     'reads in flight outside a React render (this app\'s route handlers) share one process-wide map, where ' +
-    'pnf-explorer shares them only within a render; and a stale answer is returned at once and read again after the ' +
-    'response. See the note at the top of the file.',
+    'pnf-explorer shares them only within a render; a stale answer is returned at once and read again after the ' +
+    'response; and while a failed read is held, a cached answer is served instead of the error. See the note at the ' +
+    'top of the file.',
 };
 
 const BANNER =

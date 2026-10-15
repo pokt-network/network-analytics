@@ -81,3 +81,61 @@ test('outside a request (no after()), a stale answer is read again before answer
       delete globalThis.__incrementalCache;
     }
   }));
+
+const ERROR = { data: null, errors: [{ message: 'canceling statement due to statement timeout' }] };
+const failing = (calls) => {
+  globalThis.fetch = async (url, init) => {
+    calls.push(JSON.parse(init.body));
+    return new Response(JSON.stringify(ERROR), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+};
+
+test('a failed read is held 15 s: requests get the last good answer with no read, then one read again', () =>
+  withCache(async (cache) => {
+    const calls = countingIndexer();
+    await (await request(cache, () => read('pokt1d'))).drain();
+    cache.advance(65);
+    failing(calls);
+    const stale = await request(cache, () => read('pokt1d'));
+    await stale.drain();
+    assert.equal(calls.length, 2, 'the read after the response failed');
+    for (let i = 0; i < 4; i++) {
+      const r = await request(cache, () => read('pokt1d'));
+      assert.equal(count(r.result), '1', 'the last good answer');
+      assert.equal(r.queued, 0, 'no read while the failure is held');
+    }
+    assert.equal(calls.length, 2);
+    cache.advance(16);
+    const later = await request(cache, () => read('pokt1d'));
+    assert.equal(later.queued, 1, 'the hold ended: read again after the response');
+    await later.drain();
+    assert.equal(calls.length, 3);
+  }));
+
+test('with nothing cached, a held failure is thrown with no request until the hold ends', () =>
+  withCache(async (cache) => {
+    const calls = [];
+    failing(calls);
+    await assert.rejects(request(cache, () => read('pokt1e')), /statement timeout/);
+    await assert.rejects(request(cache, () => read('pokt1e')), (e) => e.name === 'DataError' && /statement timeout/.test(e.message));
+    assert.equal(calls.length, 1);
+    cache.advance(16);
+    await assert.rejects(request(cache, () => read('pokt1e')), /statement timeout/);
+    assert.equal(calls.length, 2);
+  }));
+
+test('an aborted read holds nothing: the next read asks the indexer', () =>
+  withCache(async (cache) => {
+    const calls = countingIndexer();
+    const ac = new AbortController();
+    ac.abort();
+    globalThis.fetch = async (url, init) => {
+      calls.push(1);
+      if (init.signal?.aborted) throw new DOMException('aborted', 'AbortError');
+      return new Response(JSON.stringify(answer(calls.length)), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    await assert.rejects(request(cache, () => gqlFetch('main', Q, { o: ['pokt1f'] }, { revalidate: 60, signal: ac.signal })));
+    const ok = await request(cache, () => read('pokt1f'));
+    assert.equal(count(ok.result), '2');
+    assert.equal(calls.length, 2);
+  }));

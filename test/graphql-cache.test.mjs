@@ -42,13 +42,17 @@ const Q = 'query ownerTest($o: [String]) { getSupplierFleetList(owners: $o, bySu
 const GOOD = { data: { getSupplierFleetList: [{ supplierCount: '1233' }] } };
 const ERROR = { data: null, errors: [{ message: 'canceling statement due to statement timeout' }] };
 
-test('a 200 with errors is not cached: the next call asks the indexer again, and its good answer is cached', async () => {
+test('a 200 with errors is not cached: it is held 15 s, then the indexer is asked again and its good answer is cached', async () => {
   const realFetch = globalThis.fetch;
+  const realNow = Date.now;
   globalThis.__incrementalCache = memoryCache();
   const calls = fakeIndexer([ERROR, GOOD]);
   try {
     await assert.rejects(gqlFetch('main', Q, { o: ['pokt1a'] }, { revalidate: 1800 }), /statement timeout/);
     assert.equal(globalThis.__incrementalCache.entries.size, 0, 'the error was not stored');
+    await assert.rejects(gqlFetch('main', Q, { o: ['pokt1a'] }, { revalidate: 1800 }), /statement timeout/);
+    assert.equal(calls.length, 1, 'within 15 s the held error, with no request');
+    Date.now = () => realNow() + 16_000;
     const second = await gqlFetch('main', Q, { o: ['pokt1a'] }, { revalidate: 1800 });
     assert.deepEqual(second, GOOD.data);
     assert.equal(calls.length, 2, 'the second call went to the indexer');
@@ -59,6 +63,7 @@ test('a 200 with errors is not cached: the next call asks the indexer again, and
     await gqlFetch('main', Q, { o: ['pokt1b'] }, { revalidate: 1800 });
     assert.equal(calls.length, 3);
   } finally {
+    Date.now = realNow;
     globalThis.fetch = realFetch;
     delete globalThis.__incrementalCache;
   }
