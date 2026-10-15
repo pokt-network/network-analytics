@@ -102,8 +102,14 @@ export function staleCached<E extends Envelope<unknown>>(
 }
 
 /** staleCached for a value that carries no build time of its own: the entry stamps it. */
-export async function staleValue<T>(key: string[], ttlSeconds: number, build: () => Promise<T>, tags?: string[]): Promise<T> {
-  return (await staleCached(key, ttlSeconds, stamped(build), undefined, tags)).data;
+export async function staleValue<T>(
+  key: string[],
+  ttlSeconds: number,
+  build: () => Promise<T>,
+  tooOldAt?: (value: Envelope<T>, at: number) => boolean,
+  tags?: string[],
+): Promise<T> {
+  return (await staleCached(key, ttlSeconds, stamped(build), tooOldAt, tags)).data;
 }
 
 /**

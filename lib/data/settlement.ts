@@ -3,6 +3,7 @@ import { NETWORK, type RangeKey } from '@/lib/app-config';
 import { LAST_SETTLEMENT } from '@/lib/queries/analytics';
 import { rangeWindow, type TimeWindow } from '@/lib/timeranges';
 import { microsToIso, toMicros } from './coverage';
+import { staleValue } from '@/lib/window-cache';
 
 // Rewards, earnings and settled claims change only at settlement blocks. Their windows end at the last settlement, not at
 // "now": the query variables then stay the same until the next settlement, so every request between two settlements is
@@ -31,11 +32,24 @@ export function settledOf(
 
 let lastWritten: Settlement | null = null;
 
-/** The last fully written settlement (null before the first one, or while none has been seen written yet). */
+/**
+ * The last fully written settlement (null before the first one, or while none has been seen written yet). Cached 30 s and
+ * served at once at any age while it is read again after the response: an older settlement is still a fully written one,
+ * so the windows it gives are only older, never partial, and no reward read waits for this one.
+ */
 export async function getLastSettlement(): Promise<Settlement | null> {
-  const data = await gqlFetch<Parameters<typeof settledOf>[0]>(NETWORK, LAST_SETTLEMENT, {}, { revalidate: 30 });
-  lastWritten = settledOf(data, lastWritten);
-  return lastWritten;
+  const read = async () => {
+    const data = await gqlFetch<Parameters<typeof settledOf>[0]>(NETWORK, LAST_SETTLEMENT, {}, { cache: 'no-store' });
+    lastWritten = settledOf(data, lastWritten);
+    return lastWritten;
+  };
+  try {
+    return await staleValue(['last-settlement'], 30, read, () => false);
+  } catch (e) {
+    // outside a Next server (scripts, tests) there is no cache: read it
+    if (e instanceof Error && e.message.startsWith('Invariant: incrementalCache missing')) return read();
+    throw e;
+  }
 }
 
 /**
