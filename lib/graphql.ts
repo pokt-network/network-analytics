@@ -3,6 +3,14 @@
 // Managed by scripts/sync-vendor.mjs. Edit upstream in the explorer repo, then re-sync.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// DIVERGES from pnf-explorer feat/closed-schema 4107d66 in one place: reads in flight OUTSIDE a React render (this app's
+// route handlers, which are all dynamic) share one process-wide map (`inflightReads`). pnf-explorer shares only within a
+// render, where a joiner would not register its revalidate on a prerendered route; here every gqlFetch call runs in a
+// dynamic route handler, where React's `cache` gives a new map on every call, so nothing would be shared. Measured in
+// the built app, 3 identical cold requests at once: one upstream request per distinct read with this map, three without
+// it (as many as the old fetch cache made). Kept here only; a re-sync from pnf-explorer drops it.
+
+import { cache } from 'react';
 import { getNetwork, type NetworkId } from './networks';
 import { DataError } from './errors';
 
@@ -30,8 +38,9 @@ export interface GqlOptions {
  * `revalidate: false`. Here the request goes out with no fetch cache inside `unstable_cache`, which stores a result
  * only once its callback has returned: a callback that throws (errors in the body, a non-2xx status, a network error)
  * stores nothing, and the next call asks again. One request per cache miss, as before. An answer whose only errors are
- * on `partial` fields is returned to the caller but not cached either: it is not the complete answer. Outside a Next
- * server (a script, a unit test) there is no cache to keep it in, and the call goes straight out.
+ * on `partial` fields is returned to the caller but not cached as the answer: it is held apart for at most 15 s, so a
+ * field that keeps failing costs one request per 15 s window (see heldPartial). Outside a Next server (a script, a unit
+ * test) there is no cache to keep it in, and the call goes straight out.
  */
 export async function gqlFetch<T>(
   network: NetworkId,
@@ -42,11 +51,14 @@ export async function gqlFetch<T>(
   if (opts.cache || (opts.revalidate !== false && typeof opts.revalidate !== 'number')) {
     return settle(await postGraphql<T>(network, query, variables, opts.cache, opts.signal), opts.partial);
   }
-  // The same read already on its way (generateMetadata and the page, or two panels asking alike) shares that request:
-  // unstable_cache does not join a miss in flight, where Next's fetch cache did. A call with an abort signal goes its own
-  // way (still through the cache) and nobody joins it: its abort must reject it alone.
+  // The same read already on its way in this render (generateMetadata and the page, or two panels asking alike) shares
+  // that request: unstable_cache does not join a miss in flight, where Next's fetch cache did. Only within one render:
+  // the read that joins does not register its revalidate on its own route (unstable_cache does that for the call that
+  // runs), so a prerendered page that joined another route's read could keep its HTML for good. A call with an abort
+  // signal goes its own way (still through the cache) and nobody joins it: its abort must reject it alone.
   if (opts.signal) return cachedRead<T>(network, query, variables, opts);
   const key = JSON.stringify([network, query, variables ?? null, opts.revalidate, opts.partial ?? null]);
+  const inflight = inflightReads();
   const pending = inflight.get(key);
   if (pending) return pending as Promise<T>;
   const read = cachedRead<T>(network, query, variables, opts).finally(() => inflight.delete(key));
@@ -54,27 +66,83 @@ export async function gqlFetch<T>(
   return read;
 }
 
-/** Cached reads in flight, by network, query, variables and options; each removed once it settles. */
-const inflight = new Map<string, Promise<unknown>>();
+/**
+ * The current render's cached reads in flight, by network, query, variables and options; each removed once it settles.
+ * React's `cache` keeps one Map per server render (its request scope) and makes a new one on every call outside a render,
+ * where nothing is shared. Joiners get the same object: callers copy before they change a result.
+ */
+const renderReads = cache(() => new Map<string, Promise<unknown>>());
+
+/** Cached reads in flight outside a render (route handlers, scripts): one map for the process. */
+const processReads = new Map<string, Promise<unknown>>();
+
+/** This render's map inside a render; outside one (`cache` gives a new map on each call there), the process's. */
+function inflightReads(): Map<string, Promise<unknown>> {
+  const reads = renderReads();
+  return reads === renderReads() ? reads : processReads;
+}
 
 async function cachedRead<T>(network: NetworkId, query: string, variables: Record<string, unknown> | undefined, opts: GqlOptions): Promise<T> {
   // loaded here, on the server-only path: a client component that imports gqlFetch (live polling, no-store) does not
   // pull Next's cache runtime into its bundle
   const { unstable_cache } = await import('next/cache');
+  if (opts.partial) {
+    const held = await heldPartial<T>(unstable_cache, network, query, variables);
+    if (held !== undefined) return held;
+  }
   const cached = unstable_cache(
     async (n: NetworkId, q: string, v: Record<string, unknown> | null) =>
       complete(await postGraphql<T>(n, q, v ?? undefined, 'no-store', opts.signal), opts.partial),
-    ['gqlFetch'],
+    // The policy is part of the key. Next judges an entry's age by the revalidate of the call that reads it, so an entry
+    // shared across policies would let a 15 s answer (a block not written yet) be fresh for good to a `false` reader.
+    ['gqlFetch', String(opts.revalidate)],
     { revalidate: opts.revalidate },
   );
   try {
     return await cached(network, query, variables ?? null);
   } catch (e) {
-    // A partial answer reaches its caller uncached.
-    if (e instanceof PartialAnswer) return e.data as T;
-    if (e instanceof Error && e.message.startsWith('Invariant: incrementalCache missing')) {
+    // A partial answer reaches its caller, and is held only for the rest of its window.
+    if (e instanceof PartialAnswer) return (await heldPartial<T>(unstable_cache, network, query, variables, e.data as T)) ?? (e.data as T);
+    if (noIncrementalCache(e)) {
       return settle(await postGraphql<T>(network, query, variables, 'no-store', opts.signal), opts.partial);
     }
+    throw e;
+  }
+}
+
+const noIncrementalCache = (e: unknown) => e instanceof Error && e.message.startsWith('Invariant: incrementalCache missing');
+
+/** How long a partial answer is served again: a field that keeps failing costs one request per window, not per render. */
+const PARTIAL_WINDOW_S = 15;
+
+class NotHeld extends Error {}
+
+/**
+ * The partial answer held for this read in the current window, if any; given `data`, holds it (unless one is held already,
+ * which is returned instead). Its own entry, apart from the complete answers: the key carries the window's number, so the
+ * next window misses and asks the indexer again, and the entry outlives its window (revalidate 2 windows), so Next never
+ * serves it stale. Looking up stores nothing: the callback throws when there is nothing to hold. One callback text for
+ * both uses, since unstable_cache keys on it.
+ */
+async function heldPartial<T>(
+  unstable_cache: typeof import('next/cache').unstable_cache,
+  network: NetworkId,
+  query: string,
+  variables: Record<string, unknown> | undefined,
+  data?: T,
+): Promise<T | undefined> {
+  const held = unstable_cache(
+    async (...key: [NetworkId, string, Record<string, unknown> | null, number]) => {
+      if (data === undefined) throw new NotHeld(`No partial answer held in window ${key[3]}`);
+      return data;
+    },
+    ['gqlFetch', 'partial'],
+    { revalidate: 2 * PARTIAL_WINDOW_S },
+  );
+  try {
+    return await held(network, query, variables ?? null, Math.floor(Date.now() / (PARTIAL_WINDOW_S * 1000)));
+  } catch (e) {
+    if (e instanceof NotHeld || noIncrementalCache(e)) return undefined;
     throw e;
   }
 }
