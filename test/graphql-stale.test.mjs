@@ -139,3 +139,59 @@ test('an aborted read holds nothing: the next read asks the indexer', () =>
     assert.equal(count(ok.result), '2');
     assert.equal(calls.length, 2);
   }));
+
+// review of d5945e5
+function slowCountingIndexer(ms) {
+  const calls = [];
+  globalThis.fetch = (url, init) =>
+    new Promise((resolve) => {
+      calls.push(JSON.parse(init.body));
+      const n = calls.length;
+      setTimeout(() => resolve(new Response(JSON.stringify(answer(n)), { status: 200, headers: { 'content-type': 'application/json' } })), ms);
+    });
+  return calls;
+}
+
+test('#1 a request that comes while the read after a response is still running does not read again', () =>
+  withCache(async (cache) => {
+    await (await request(cache, () => read('pokt1g'))).drain();
+    const calls = slowCountingIndexer(50);
+    cache.advance(65);
+    const a = await request(cache, () => read('pokt1g'));
+    const draining = a.drain();
+    await new Promise((r) => setTimeout(r, 10)); // a's read is on its way
+    const b = await request(cache, () => read('pokt1g'));
+    await Promise.all([draining, b.drain()]);
+    assert.equal(calls.length, 1, 'one read for both requests');
+  }));
+
+test('#2 an answer read more than two revalidates ago is read again before answering', () =>
+  withCache(async (cache) => {
+    const calls = countingIndexer();
+    await (await request(cache, () => read('pokt1h'))).drain();
+    cache.advance(3 * 60);
+    const r = await request(cache, () => read('pokt1h'));
+    assert.equal(count(r.result), '2', 'a fresh answer, not the one from three revalidates ago');
+    await r.drain();
+    assert.equal(calls.length, 2, 'and no second read after the response');
+  }));
+
+const PARTIAL_Q = 'query p($o: [String]) { getSupplierFleetList(owners: $o, bySupplier: false) { supplierCount } extra: x { y } }';
+test('#5 while a partial answer is held, a request with a cached complete answer gets the cached answer', () =>
+  withCache(async (cache) => {
+    let mode = 'full';
+    globalThis.fetch = async () => {
+      const body = mode === 'full'
+        ? { data: { getSupplierFleetList: [{ supplierCount: '1' }], extra: { y: 1 } } }
+        : { data: { getSupplierFleetList: [{ supplierCount: '2' }], extra: null }, errors: [{ message: 'boom', path: ['extra'] }] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const p = () => gqlFetch('main', PARTIAL_Q, { o: ['pokt1i'] }, { revalidate: 60, partial: ['extra'] });
+    await (await request(cache, p)).drain();
+    cache.advance(65);
+    mode = 'partial';
+    const stale = await request(cache, p);
+    await stale.drain(); // the read after the response answers partial: held
+    const r = await request(cache, p);
+    assert.deepEqual(r.result.extra, { y: 1 }, 'the cached complete answer, not the held partial one');
+  }));

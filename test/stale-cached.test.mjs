@@ -83,3 +83,40 @@ test('a build that throws stores nothing, and a failed refresh keeps the stale v
     cache.restore();
   }
 });
+
+// review of d5945e5
+test('#3 with no too-old rule given, a value built more than two TTLs ago is built by the request', async () => {
+  const cache = nextCache();
+  try {
+    const { build, count } = counter();
+    await (await request(cache, () => staleCached(['t4'], TTL, build))).drain();
+    cache.advance(3 * TTL);
+    const r = await request(cache, () => staleCached(['t4'], TTL, build));
+    assert.equal(r.result.data, 2, 'built by the request');
+    assert.equal(count(), 2);
+  } finally {
+    cache.restore();
+  }
+});
+
+test('#4 a rebuild after the response reads the indexer fresh, not the gqlFetch answers that are stale too', async () => {
+  const cache = nextCache();
+  const realFetch = globalThis.fetch;
+  try {
+    const { gqlFetch } = await import('../lib/graphql.ts');
+    let n = 0;
+    globalThis.fetch = async () => new Response(JSON.stringify({ data: { v: ++n } }), { status: 200, headers: { 'content-type': 'application/json' } });
+    const build = async () => ({ __diagBuiltAt: Date.now(), data: (await gqlFetch('main', 'query q { v }', { k: 't5' }, { revalidate: TTL })).v });
+    // a plain gqlFetch read first, so its own entry exists apart from the route's
+    await (await request(cache, () => gqlFetch('main', 'query q { v }', { k: 't5' }, { revalidate: TTL }))).drain();
+    await (await request(cache, () => staleCached(['t5'], TTL, build))).drain();
+    cache.advance(TTL + 5);
+    await (await request(cache, () => staleCached(['t5'], TTL, build))).drain();
+    const r = await request(cache, () => staleCached(['t5'], TTL, build));
+    assert.equal(r.result.data, n, 'the rebuilt value is the newest indexer answer');
+    assert.ok(n >= 2);
+  } finally {
+    globalThis.fetch = realFetch;
+    cache.restore();
+  }
+});

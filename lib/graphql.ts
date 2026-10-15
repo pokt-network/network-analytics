@@ -10,11 +10,12 @@
 // shared. Measured in the built app, 3 identical cold requests at once: one upstream request per distinct read with
 // this map, three without it (as many as the old fetch cache made). Second: a cached answer read more than its
 // revalidate ago is returned at once and read again after the response (`refreshAfter`), where unstable_cache's own
-// background read would hold a route handler's response until it finished. Its entries carry when they were read (key
-// part 'read-at'). Third, which the second makes possible: while a failed read is held, a request that has a cached
-// answer gets that answer (and no read is made until the hold ends), where pnf-explorer throws the held error; only a
-// cache miss throws it. All three are kept here only; a re-sync from pnf-explorer would drop them, so scripts/sync-
-// vendor.mjs leaves this file alone.
+// background read would hold a route handler's response until it finished; one read more than two revalidates ago, or
+// asked for inside `readingFresh` (a cache rebuild), is read again before answering. Its entries carry when they were
+// read (key part 'read-at'). Third, which the second makes possible: while a failed or partial read is held, a request
+// that has a cached answer gets that answer (and no read is made until the hold ends), where pnf-explorer gives the
+// held one; only a cache miss gets it. All three are kept here only; a re-sync from pnf-explorer would drop them, so
+// scripts/sync-vendor.mjs leaves this file alone.
 
 import { cache } from 'react';
 import { getNetwork, type NetworkId } from './networks';
@@ -45,7 +46,7 @@ export interface GqlOptions {
  * only once its callback has returned: a callback that throws (errors in the body, a non-2xx status, a network error)
  * stores nothing. One request per cache miss, as before. An answer whose only errors are on `partial` fields is returned
  * to the caller but not cached either. A failed or partial answer is held for 15 s per process and then asked again, so a
- * read that keeps failing costs one request per 15 s window (see holds). Outside a Next server (a script, a unit test)
+ * read that keeps failing costs one request per 15 s window (see holds); meanwhile a cached answer is served. Outside a Next server (a script, a unit test)
  * there is no cache to keep it in, and the call goes straight out.
  */
 export async function gqlFetch<T>(
@@ -62,7 +63,7 @@ export async function gqlFetch<T>(
   // the read that joins does not register its revalidate on its own route (unstable_cache does that for the call that
   // runs), so a prerendered page that joined another route's read could keep its HTML for good. A call with an abort
   // signal goes its own way (still through the cache) and nobody joins it: its abort must reject it alone.
-  if (opts.signal) return cachedRead<T>(network, query, variables, opts);
+  if (opts.signal || freshReads?.getStore()) return cachedRead<T>(network, query, variables, opts);
   const key = JSON.stringify([network, query, variables ?? null, opts.revalidate, opts.partial ?? null]);
   const inflight = inflightReads();
   const pending = inflight.get(key);
@@ -93,14 +94,17 @@ async function cachedRead<T>(network: NetworkId, query: string, variables: Recor
   // pull Next's cache runtime into its bundle
   const { unstable_cache } = await import('next/cache');
   const holdKey = JSON.stringify([network, query, variables ?? null, opts.partial ?? null]);
-  const held = activeHold(holdKey);
-  if (held?.kind === 'partial') return held.data as T;
-  // The request's abort signal, dropped by a refresh that runs after the response (the request may be gone by then).
+  // The request's abort signal, dropped by a read that runs after the response (the request may be gone by then).
   let signal = opts.signal;
+  // An answer read outside the cache, which the next pass through `read` stores as is.
+  let produced: ReadAnswer<T> | undefined;
   const read = async (n: NetworkId, q: string, v: Record<string, unknown> | null): Promise<ReadAnswer<T>> => {
-    // A held error is thrown only where there is no answer to serve: a cache miss lands here, a cached answer does not.
-    const error = activeHold(holdKey);
-    if (error?.kind === 'error') throw new DataError(error.error.message, error.error.kind, error.error.status, error.error.denyReason);
+    if (produced) return produced;
+    // A held answer is given only where there is no answer to serve: a cache miss lands here, a cached answer does not.
+    // A held partial answer is thrown as such, so that it reaches the caller and is not stored.
+    const held = activeHold(holdKey);
+    if (held?.kind === 'partial') throw new PartialAnswer(held.data);
+    if (held?.kind === 'error') throw new DataError(held.error.message, held.error.kind, held.error.status, held.error.denyReason);
     try {
       const data = complete(await postGraphql<T>(n, q, v ?? undefined, 'no-store', signal), opts.partial);
       holds.delete(holdKey);
@@ -122,24 +126,34 @@ async function cachedRead<T>(network: NetworkId, query: string, variables: Recor
       ['gqlFetch', 'read-at', String(opts.revalidate)],
       { revalidate },
     )(network, query, variables ?? null);
+  // Reads the indexer now and stores the answer: a read at `revalidate` sees the old entry stale (it was read more than
+  // that ago) and stores `produced` in its place.
+  const readAndStore = async (revalidate: number): Promise<T> => {
+    produced = await read(network, query, variables ?? null);
+    await entry(revalidate);
+    return produced.data;
+  };
   try {
     if (opts.revalidate === false) return (await entry(false)).data;
     const ttl = opts.revalidate as number;
+    const half = Math.max(1, Math.floor(ttl / 2));
     // Read as never stale, and judge the age here: a stale answer is returned at once and read again after the response.
     // unstable_cache's own background read would hold a route handler's response until it finished.
     const got = await entry(ONE_YEAR_S);
-    if (Date.now() - got.readAt <= ttl * 1000) return got.data;
+    const age = Date.now() - got.readAt;
+    if (age <= ttl * 1000 && !freshReads?.getStore()) return got.data;
     // a failed read of it is held: the last good answer is served, and read again once the hold ends
     if (activeHold(holdKey)) return got.data;
+    // older than two revalidates, or a cache rebuild asking for fresh answers (readingFresh): read now
+    if (age > 2 * ttl * 1000 || freshReads?.getStore()) return await readAndStore(half);
     const id = JSON.stringify([network, query, variables ?? null, ttl]);
-    // The entry was read more than one TTL ago, so a read at half the TTL sees it stale and reads it again in the
-    // background, which Next awaits after the callbacks; stored with that half TTL as its own revalidate.
+    // The read runs (and is awaited) before the refresh ends, so a request meanwhile does not read again.
     const scheduled = await refreshAfter(id, async () => {
       signal = undefined;
-      await entry(Math.max(1, Math.floor(ttl / 2)));
+      await readAndStore(half);
     });
-    // outside a request there is no after(): unstable_cache's own rule, which reads it again before answering there
-    return scheduled ? got.data : (await entry(ttl)).data;
+    // outside a request there is no after(): read it again before answering, as unstable_cache does there
+    return scheduled ? got.data : await readAndStore(half);
   } catch (e) {
     // A partial answer reaches its caller (and is held, above).
     if (e instanceof PartialAnswer) return e.data as T;
@@ -149,6 +163,21 @@ async function cachedRead<T>(network: NetworkId, query: string, variables: Recor
     throw e;
   }
 }
+
+/**
+ * Runs `fn` with every gqlFetch in it reading the indexer, not a stale cached answer: a cache rebuild that runs outside
+ * unstable_cache (after the response, or a too-old value built by the request) would otherwise store a stale inner
+ * answer stamped as new. Next provides AsyncLocalStorage on the server; in a browser bundle there is none, and nothing
+ * to rebuild.
+ */
+export function readingFresh<R>(fn: () => Promise<R>): Promise<R> {
+  return freshReads ? freshReads.run(true, fn) : fn();
+}
+
+const freshReads: import('node:async_hooks').AsyncLocalStorage<true> | null =
+  typeof (globalThis as { AsyncLocalStorage?: unknown }).AsyncLocalStorage === 'function'
+    ? new (globalThis as unknown as { AsyncLocalStorage: typeof import('node:async_hooks').AsyncLocalStorage }).AsyncLocalStorage<true>()
+    : null;
 
 /** A cached answer and when (ms) it was read from the indexer. */
 type ReadAnswer<T> = { readAt: number; data: T };
@@ -164,7 +193,12 @@ async function refreshAfter(id: string, refresh: () => Promise<void>): Promise<b
   const { after } = await import('next/server');
   refreshing.add(id);
   try {
-    after(() => refresh().finally(() => refreshing.delete(id)));
+    // a failed read is held (see holds) and logged; the last good answer stays cached
+    after(() =>
+      refresh()
+        .catch((e) => console.error('gqlFetch: reading a stale answer again failed', e))
+        .finally(() => refreshing.delete(id)),
+    );
     return true;
   } catch {
     refreshing.delete(id);
@@ -188,8 +222,8 @@ const HOLD_MS = 15_000;
 /**
  * Failed and partial answers by read (network, query, variables, partial), each until its window ends. Per process and
  * apart from unstable_cache, so the cache stores only complete answers and a held answer registers no revalidate on the
- * route. Within the window an error is thrown again even where a stale complete answer is cached: an error page for at
- * most 15 s, where the fetch cache served the error for the read's whole TTL.
+ * route. Within the window a request with a cached answer (fresh or stale) gets that answer and no read is made; only a
+ * cache miss is given the held error (or partial answer), where the fetch cache served the error for the read's whole TTL.
  */
 const holds = new Map<string, { until: number } & ({ kind: 'partial'; data: unknown } | { kind: 'error'; error: DataError })>();
 

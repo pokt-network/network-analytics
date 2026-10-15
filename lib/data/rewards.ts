@@ -103,6 +103,6 @@ export const ROLLING_TTL = 30;
  *  call this alongside their own cached payload and merge the result, never from within it. */
 export async function getCachedRolling24hStats(): Promise<Rolling24h> {
   // served at once while stale and rebuilt after the response, as unstable_cache's own revalidation would hold the end
-  // of the response (lib/window-cache.ts); a stale entry of any age is served, as before
+  // of the response (lib/window-cache.ts); one built more than two TTLs ago is rebuilt by the request
   return staleValue(['rolling24h', 'v2'], ROLLING_TTL, getRolling24hStats);
 }

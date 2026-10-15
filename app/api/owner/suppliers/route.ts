@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
   const filterParam = req.nextUrl.searchParams.get('filter');
   const filter: StakeFilter = isStakeFilter(filterParam) ? filterParam : 'all';
   const reqSize = Number(req.nextUrl.searchParams.get('pageSize'));
-  const pageSize = Number.isFinite(reqSize) && reqSize > 0 ? Math.min(reqSize, MAX_PAGE_SIZE) : PAGE_SIZE;
+  const pageSize = Number.isFinite(reqSize) && reqSize >= 1 ? Math.min(Math.floor(reqSize), MAX_PAGE_SIZE) : PAGE_SIZE;
 
   // after=<endCursor of the previous page> reads the rows that follow it; without it, the first page.
   const afterParam = req.nextUrl.searchParams.get('after');

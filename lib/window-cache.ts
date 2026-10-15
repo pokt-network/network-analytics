@@ -2,6 +2,7 @@ import { unstable_cache } from 'next/cache';
 import { after } from 'next/server';
 import type { RangeKey } from '@/lib/app-config';
 import { stamped, type Envelope } from '@/lib/diagnostics';
+import { readingFresh } from '@/lib/graphql';
 import { WINDOW_BUCKET_MS } from '@/lib/timeranges';
 
 // Caches of a range's data ("the last 30d") under a STABLE key (the fixed part and the range), served at once while
@@ -66,16 +67,19 @@ const refreshing = new Set<string>();
 
 /**
  * `build`'s value cached `ttlSeconds` under `key`, served at once while stale and rebuilt after the response (see the
- * top of this file); a value `tooOldAt` is not served (default: none is, as unstable_cache serves any stale entry).
+ * top of this file); a value `tooOldAt` is not served (default: one built more than two TTLs ago), the request builds
+ * its own. Every build outside unstable_cache reads the indexer fresh (`readingFresh`): a gqlFetch answer that is stale
+ * too would otherwise be stored stamped as new.
  */
 export function staleCached<E extends Envelope<unknown>>(
   key: string[],
   ttlSeconds: number,
   build: () => Promise<E>,
-  tooOldAt: (value: E, at: number) => boolean = () => false,
+  tooOldAt: (value: E, at: number) => boolean = (v, at) => at - v.__diagBuiltAt > 2 * ttlSeconds * 1000,
   tags?: string[],
 ): Promise<E> {
   const id = key.join('\n');
+  const fresh = () => readingFresh(build);
   // One entry per key: every call goes through this one function, so unstable_cache's key (its callback's source and
   // `key`) is the same for the read and the write. `revalidate` only decides whether unstable_cache sees the entry stale.
   const entry = (revalidate: number, produce: () => Promise<E>) => unstable_cache(async () => produce(), key, { revalidate, tags })();
@@ -84,7 +88,7 @@ export function staleCached<E extends Envelope<unknown>>(
     refreshing.add(id);
     after(async () => {
       try {
-        const value = built ?? (await build());
+        const value = built ?? (await fresh());
         // The entry was built more than one TTL ago, so a read with half the TTL sees it stale and stores `value` in its
         // place. The write keeps that revalidate as the entry's own: half a TTL, not 1 s, in case a remote data cache
         // (Vercel's, not read here) evicts by it. Reads pass a year, so the entry's age is judged by serveCached alone.
@@ -94,7 +98,7 @@ export function staleCached<E extends Envelope<unknown>>(
       }
     });
   };
-  return serveCached(() => entry(ONE_YEAR_SECONDS, build), build, refresh, ttlSeconds, tooOldAt);
+  return serveCached(() => entry(ONE_YEAR_SECONDS, fresh), fresh, refresh, ttlSeconds, tooOldAt);
 }
 
 /** staleCached for a value that carries no build time of its own: the entry stamps it. */

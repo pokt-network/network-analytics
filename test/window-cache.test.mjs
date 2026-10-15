@@ -48,7 +48,7 @@ test('the edge, and a value with no window (written before this cache carried on
   assert.equal(tooOld(undefined, TTL, t), true);
 });
 
-test('with no too-old rule (the rolling-24h entry), a stale value of any age is served at once and refreshed after', async () => {
+test('serveCached with a rule that never says too old serves a stale value of any age at once and refreshes it after', async () => {
   let builds = 0;
   const refreshes = [];
   const cached = { __diagBuiltAt: t - 3 * 3_600_000, data: 'three hours old' };
