@@ -61,7 +61,7 @@ function OperatorBody() {
   const [tab, setTab] = useState('rewards_by_service');
 
   const addrParam = addresses.join(',');
-  const summary = useTabData<OperatorSummary>(addrParam ? `/api/operator/summary?addresses=${addrParam}` : '');
+  const summary = useTabData<OperatorSummary>(addrParam ? `/api/operator/summary?addresses=${addrParam}` : '', { settled: true });
 
   // Eagerly warm every tab's endpoint in parallel once addresses (and the range) are known. These are
   // heavy indexer aggregations (seconds each on a cold miss); firing them upfront — the same work the

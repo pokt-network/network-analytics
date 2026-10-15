@@ -16,7 +16,7 @@ export function RewardsByServiceTab() {
   const { addresses, range } = useStakingTool();
   const d = useTabData<ServiceRewards>(
     addresses.length ? `/api/operator/rewards-by-service?addresses=${addresses.join(',')}&range=${range}` : '',
-    { prefetchSiblings: false },
+    { prefetchSiblings: false, settled: true },
   );
   const rows = d.data?.rows ?? [];
   const coverageNote = d.error ? null : rangeNote(d.data?.range ?? null, range === '24h' ? 'hour' : 'day');

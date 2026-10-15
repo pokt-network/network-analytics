@@ -405,3 +405,12 @@ export const SUPPLIER_SLASH_TOTALS = /* GraphQL */ `
     )
   }
 `;
+
+// The last settlement the money tables hold, and the last block the indexer finished: a settlement above it is in a
+// block still being written (lib/data/settlement.ts).
+export const LAST_SETTLEMENT = /* GraphQL */ `
+  query lastSettlement {
+    getLastSettlement { height blockTime }
+    _metadata { lastProcessedHeight }
+  }
+`;

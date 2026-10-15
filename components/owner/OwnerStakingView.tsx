@@ -55,7 +55,7 @@ function OwnerBody() {
   const summary = useTabData<OwnerSummary>(addrParam ? `/api/staking/owner-summary?addresses=${addrParam}` : '');
   // Range-dependent rewards total + settled-claims count (+ coverage), from the settlement catalog.
   // group=0 so this shares /api/owner's cache entry with the chart in the common (ungrouped) case.
-  const owner = useTabData<OwnerResponse>(addrParam ? `/api/owner?addresses=${addrParam}&range=${range}&group=0` : '');
+  const owner = useTabData<OwnerResponse>(addrParam ? `/api/owner?addresses=${addrParam}&range=${range}&group=0` : '', { settled: true });
 
   const interval = range === '24h' ? 'hour' : 'day';
   const totalNote = owner.error ? null : rangeNote(owner.data?.totalRange ?? null, interval);

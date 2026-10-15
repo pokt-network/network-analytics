@@ -3,6 +3,7 @@ import { toDate } from '@/lib/time';
 import { UPOKT_PER_POKT } from '@/lib/config';
 import { NETWORK, type RangeKey } from '@/lib/app-config';
 import { rangeWindow, rangeTTL, WINDOW_BUCKET_MS } from '@/lib/timeranges';
+import { getLastSettlement, settledWindow } from './settlement';
 import {
   OPERATOR_CLAIMS_SETTLED,
   OPERATOR_CLAIM_PENALTIES,
@@ -83,7 +84,7 @@ export interface ClaimProofs {
  *  from the settlement catalog: `proofs` the settled ones, `expired` the expired ones, `claims` every one closed
  *  (settled, expired or discarded). A bucket with nothing covered is null, never 0. */
 export async function getOperatorClaimProofs(addresses: string[], range: RangeKey): Promise<ClaimProofs> {
-  const w = rangeWindow(range);
+  const w = settledWindow(range, await getLastSettlement(), false);
   const vars = { operators: addresses, start: w.startISO, end: w.endISO, bucket: w.interval };
   const opts = { revalidate: rangeTTL(range) };
   const [earned, penalized] = await Promise.all([
@@ -147,7 +148,7 @@ export interface ServiceRewards {
 /** Rewards per service paid to the addresses in the range, read from the settlement tables (the legacy_ resolver: the
  *  getRewardsByAddressesAndTimeGroupByService JSON, each claim counted once). */
 export async function getOperatorRewardsByService(addresses: string[], range: RangeKey): Promise<ServiceRewards> {
-  const w = rangeWindow(range);
+  const w = settledWindow(range, await getLastSettlement(), true);
   const data = await gqlFetch<{ legacyRewardsByAddressesAndTimeGroupByService: unknown }>(
     NETWORK,
     REWARDS_BY_ADDRESSES_SERVICE,
@@ -181,7 +182,7 @@ export interface OverservicedPoint {
 }
 
 export async function getOperatorOverserviced(addresses: string[], range: RangeKey): Promise<OverservicedPoint[]> {
-  const w = rangeWindow(range);
+  const w = settledWindow(range, await getLastSettlement(), true);
   const data = await gqlFetch<{ getOverservicedByAddressesAndTime: unknown }>(
     NETWORK,
     OVERSERVICED_BY_ADDRESSES,

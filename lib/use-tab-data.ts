@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { beginRequest, endRequest } from './loading-store';
 import { RANGE_KEYS } from './app-config';
 
@@ -27,6 +27,25 @@ interface CacheEntry {
   data: unknown;
   /** `x-cache` from the response — lets us skip sibling prefetch when the primary was a cold MISS. */
   cache: CacheState;
+  /** The settlement height known when it was fetched (null before the first heartbeat). */
+  settled: number | null;
+}
+
+// ── The last settlement, from the /api/live heartbeat (LiveStrip) ──
+// Reward panels change only at settlements: they refetch when this height moves, and not otherwise.
+let settledHeight: number | null = null;
+const settledListeners = new Set<() => void>();
+
+/** Set by LiveStrip from each heartbeat. */
+export function setSettledHeight(height: number | null): void {
+  if (height == null || height === settledHeight) return;
+  settledHeight = height;
+  for (const l of settledListeners) l();
+}
+
+function subscribeSettled(listener: () => void): () => void {
+  settledListeners.add(listener);
+  return () => settledListeners.delete(listener);
 }
 
 const cache = new Map<string, CacheEntry>();
@@ -50,7 +69,7 @@ function fetchShared(url: string): Promise<unknown> {
       }
       const cacheState = (r.headers.get('x-cache') as CacheState) ?? null;
       const json = await r.json();
-      cache.set(url, { ts: Date.now(), data: json, cache: cacheState });
+      cache.set(url, { ts: Date.now(), data: json, cache: cacheState, settled: settledHeight });
       return json;
     })
     .finally(() => {
@@ -112,11 +131,14 @@ function maybePrefetchSiblings(url: string): void {
  * Serves cached data instantly on revisit, keeps prior data visible during a cold fetch (cleared if it fails), and reports
  * visible fetches to the global loading store so the shell can indicate activity.
  */
-export function useTabData<T>(url: string, opts: { prefetchSiblings?: boolean } = {}): State<T> {
+export function useTabData<T>(url: string, opts: { prefetchSiblings?: boolean; settled?: boolean } = {}): State<T> {
   // Sibling-range prefetch keeps range toggles instant, but it fires a request per RANGE_KEY. For
   // heavy endpoints (the operator tool's per-event resolvers, seconds each — and some ranges the
   // indexer can't compute at all), that's wasteful and hammers the bottleneck, so callers opt out.
   const doPrefetch = opts.prefetchSiblings !== false;
+  // `settled`: data that changes only at settlements, refetched when the heartbeat's settlement moves, not by age
+  const bySettlement = opts.settled === true;
+  const settled = useSyncExternalStore(subscribeSettled, () => (bySettlement ? settledHeight : null), () => null);
 
   const [state, setState] = useState<State<T>>(() => {
     const c = url ? cache.get(url) : undefined;
@@ -140,7 +162,10 @@ export function useTabData<T>(url: string, opts: { prefetchSiblings?: boolean } 
       // Already client-cached (a revisit) → the server built this at least once; warm the siblings
       // unless the last observed server state was cold.
       if (doPrefetch) maybePrefetchSiblings(url);
-      if (Date.now() - cached.ts > STALE_MS) {
+      // fetched before the first heartbeat: it belongs to the settlement known now
+      if (bySettlement && cached.settled == null) cached.settled = settled;
+      const behind = bySettlement ? settled != null && cached.settled != null && cached.settled < settled : Date.now() - cached.ts > STALE_MS;
+      if (behind) {
         fetchJson(url, false)
           .then((json) => {
             if (active) setState({ data: json as T, loading: false, error: null, url });
@@ -165,7 +190,7 @@ export function useTabData<T>(url: string, opts: { prefetchSiblings?: boolean } 
     return () => {
       active = false;
     };
-  }, [url, doPrefetch]);
+  }, [url, doPrefetch, bySettlement, settled]);
 
   return state;
 }

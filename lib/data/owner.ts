@@ -2,7 +2,8 @@ import { gqlFetch } from '@/lib/graphql';
 import { toDate } from '@/lib/time';
 import { UPOKT_PER_POKT } from '@/lib/config';
 import { NETWORK, type RangeKey } from '@/lib/app-config';
-import { rangeWindow, rangeTTL, fixedWindow } from '@/lib/timeranges';
+import { rangeTTL } from '@/lib/timeranges';
+import { getLastSettlement, settledWindow } from './settlement';
 import {
   REWARDS_BY_ADDRESSES_TIME,
   REWARDS_BY_ADDRESS_DATE,
@@ -35,7 +36,7 @@ export interface OwnerRewards {
 }
 
 export async function getOwnerRewards(addresses: string[], range: RangeKey, groupAll: boolean): Promise<OwnerRewards> {
-  const w = rangeWindow(range);
+  const w = settledWindow(range, await getLastSettlement(), true);
   if (groupAll) {
     const data = await gqlFetch<{ legacyRewardsByAddressesAndTimeGroupByDate: unknown }>(
       NETWORK,
@@ -76,7 +77,7 @@ export async function getOwnerRewards(addresses: string[], range: RangeKey, grou
 /** Total rewards in POKT and the range it covers; `totalPokt` is null ("—", never 0) when nothing in the range is
  *  covered or the value is not a number. */
 export async function getOwnerTotal(addresses: string[], range: RangeKey): Promise<{ totalPokt: number | null; range: CoverageRange | null }> {
-  const w = rangeWindow(range);
+  const w = settledWindow(range, await getLastSettlement(), true);
   const data = await gqlFetch<{ legacyRewardsByAddressesAndTime: unknown }>(
     NETWORK,
     REWARDS_BY_ADDRESSES_TIME,
@@ -99,7 +100,7 @@ export function ownerTotal(field: unknown): { totalPokt: number | null; range: C
  *  from the settlement catalog; null ("—", never 0) when nothing in the range is covered. Counting the raw settlement
  *  events instead took ~15 s for a large owner. */
 export async function getOwnerSettledClaims(addresses: string[], range: RangeKey): Promise<{ count: number | null; range: CoverageRange | null }> {
-  const w = rangeWindow(range);
+  const w = settledWindow(range, await getLastSettlement(), false);
   const data = await gqlFetch<{ getSupplierEarningsJson: unknown }>(
     NETWORK,
     OWNER_SETTLED_CLAIMS,
@@ -115,7 +116,7 @@ export async function getOwnerSettledClaims(addresses: string[], range: RangeKey
  *  chart range. Rev-share-recipient keyed (the legacy settlement-table resolver); shared with the
  *  Operator tool's summary cards. Returns POKT (null total → 0). */
 export async function getRewardsWindow(addresses: string[], seconds: number): Promise<number> {
-  const w = fixedWindow(seconds);
+  const w = settledWindow(seconds, await getLastSettlement(), true);
   const data = await gqlFetch<{ legacyRewardsByAddressesAndTime: unknown }>(
     NETWORK,
     REWARDS_BY_ADDRESSES_TIME,
