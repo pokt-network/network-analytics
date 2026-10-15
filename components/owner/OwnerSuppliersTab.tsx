@@ -43,7 +43,7 @@ export function OwnerSuppliersTab() {
       onNext={d.next}
       error={d.error}
       repeats={d.repeats}
-      missed={d.data?.totalCapped ? 0 : d.missed}
+      missed={d.missed}
       right={filterSelect}
       emptyLabel={filter === 'all' ? 'No suppliers found for these owners.' : 'No suppliers match this filter.'}
     />

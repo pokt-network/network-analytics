@@ -10,7 +10,6 @@ import {
   OWNER_CLAIMS,
   OWNER_CLAIMS_RANGE,
   OWNER_SETTLED_CLAIMS,
-  SUPPLIER_OWNERS,
 } from '@/lib/queries/analytics';
 import { num, parseScalar } from './_util';
 import { unwrapRange, notCovered, fillCoverage, type CoverageRange } from './coverage';
@@ -158,6 +157,7 @@ interface ClaimRaw {
   relayMintedUpokt: string;
   supplierId: string;
   supplierOwnerId: string | null;
+  currentOwnerId: string | null;
   coveredFrom: string | null;
   coveredTo: string | null;
   coveredGaps: Array<{ from: string | null; to: string | null }> | null;
@@ -210,11 +210,6 @@ export async function getOwnerIssuances(addresses: string[], pageSize = 25, afte
     : unwrapRange<unknown>(parseScalar((await gqlFetch<{ getClaimsJson: unknown }>(NETWORK, OWNER_CLAIMS_RANGE, { owners: addresses }, { revalidate: 30 })).getClaimsJson), false).range;
   const page = all.slice(0, pageSize);
   const last = page[page.length - 1];
-  // every supplier listed is owned now by one of the owners: with one owner that is the current owner, no lookup
-  const current =
-    addresses.length === 1
-      ? new Map(page.map((n) => [n.supplierId, addresses[0]]))
-      : await currentOwners([...new Set(page.map((n) => n.supplierId))]);
   return {
     range,
     endCursor: last ? `${last.height}:${last.eventIdx}` : null,
@@ -226,8 +221,8 @@ export async function getOwnerIssuances(addresses: string[], pageSize = 25, afte
         block: num(n.height),
         serviceId: n.serviceId,
         operator: n.supplierId,
-        owner: current.get(n.supplierId) || n.supplierOwnerId || '—',
-        ownerAsOf: current.get(n.supplierId) ? 'current' : n.supplierOwnerId ? 'settlement' : 'unknown',
+        owner: n.currentOwnerId || n.supplierOwnerId || '—',
+        ownerAsOf: n.currentOwnerId ? 'current' : n.supplierOwnerId ? 'settlement' : 'unknown',
         settlementOwner: n.supplierOwnerId ?? '',
         relays: num(n.relays),
         settledUpokt: settled,
@@ -236,25 +231,4 @@ export async function getOwnerIssuances(addresses: string[], pageSize = 25, afte
       };
     }),
   };
-}
-
-/** The current owner of each supplier (a flat lookup by id). A supplier it cannot find, or a failed lookup, leaves only
- *  that cell on the settlement's owner (or unknown). */
-async function currentOwners(ids: string[]): Promise<Map<string, string>> {
-  if (ids.length === 0) return new Map();
-  try {
-    const data = await gqlFetch<{ suppliers: { nodes: Array<{ id: string; ownerId: string }> } | null }>(
-      NETWORK,
-      SUPPLIER_OWNERS,
-      { ids, first: ids.length },
-      { revalidate: 1800 },
-    );
-    const owners = new Map((data.suppliers?.nodes ?? []).map((n) => [n.id, n.ownerId]));
-    const missing = ids.filter((id) => !owners.get(id));
-    if (missing.length) console.warn(`issuances: no current owner for ${missing.length} of ${ids.length} suppliers`);
-    return owners;
-  } catch (e) {
-    console.warn(`issuances: current owner lookup failed: ${(e as Error).message}`);
-    return new Map();
-  }
 }

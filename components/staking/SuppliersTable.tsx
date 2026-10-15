@@ -101,7 +101,7 @@ export function SuppliersTable({
             </table>
           </div>
           <div className="mt-3.5 flex items-center justify-between gap-3 text-[13px] text-text-secondary">
-            <span>{formatNumber(totalCount)}{data.totalCapped ? '+' : ''} suppliers · page {page} of {data.totalCapped ? 'many' : formatNumber(pages)}</span>
+            <span>{formatNumber(totalCount)} suppliers · page {page} of {formatNumber(pages)}</span>
             <div className="flex gap-1.5">
               <button type="button" disabled={page <= 1} onClick={onPrev} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Prev</button>
               <button type="button" disabled={!canNext} onClick={onNext} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>

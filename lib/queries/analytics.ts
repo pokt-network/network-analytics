@@ -152,7 +152,7 @@ export const REWARDS_BY_DATE_GROUPED = /* GraphQL */ `
 // $rowLimit rows (up to 1000); the next page passes the last row's height and eventIdx as $beforeHeight /
 // $beforeEventIdx, a keyset: a settlement indexed meanwhile cannot shift the rows as it does with OFFSET. supplierId is
 // the operator (node) address — the useful per-row identity across a fleet; supplierOwnerId is the owner the settlement
-// recorded.
+// recorded, currentOwnerId the supplier's owner now.
 export const OWNER_CLAIMS = /* GraphQL */ `
   query ownerClaims($owners: [String], $rowLimit: Int, $beforeHeight: BigInt, $beforeEventIdx: Int) {
     getClaimsList(
@@ -173,6 +173,7 @@ export const OWNER_CLAIMS = /* GraphQL */ `
       relayMintedUpokt
       supplierId
       supplierOwnerId
+      currentOwnerId
       coveredFrom
       coveredTo
       coveredGaps
@@ -200,57 +201,54 @@ export const SUPPLIER_FLEET_SUMMARY = /* GraphQL */ `
   }
 `;
 
-// One page of the owners' suppliers now (any status; $stakeStatuses keeps some), largest stake first, then by id, and
-// their count, in one request but not one snapshot (each field is its own READ COMMITTED statement), all from the
-// fleet function. $after holds the keyset (the rows below the
-// previous page's last stake and id) and, for "below min stake", the stake ceiling ($ceiling). The count is the fleet's
-// own supplierCount; with a ceiling ($belowMin) the fleet row cannot apply it, so the ids under it are listed instead
-// (up to 1001: more is reported as capped). serviceCount is the number of services the supplier has a live config for.
+// One page of the owners' suppliers now (any status; $stakeStatuses keeps some; $maxStakeUpokt keeps the stakes below it,
+// for "below min stake"), largest stake first, then by id, and their count, in one request (not one snapshot: each field
+// is its own READ COMMITTED statement), all from the fleet function. The page is the function's own keyset ($rowLimit
+// rows after $afterStakeUpokt / $afterSupplierId), which counts services for that page only. The count is the fleet's
+// own supplierCount under the same arguments. serviceCount is the number of services the supplier has a live config for.
 export const OWNER_SUPPLIERS = /* GraphQL */ `
   query ownerSuppliers(
     $owners: [String]
     $stakeStatuses: [String]
-    $first: Int
-    $after: GetSupplierFleetRecordFilter
-    $belowMin: Boolean!
-    $ceiling: GetSupplierFleetRecordFilter
+    $maxStakeUpokt: BigFloat
+    $rowLimit: Int
+    $afterStakeUpokt: BigFloat
+    $afterSupplierId: String
   ) {
-    rows: getSupplierFleetList(owners: $owners, stakeStatuses: $stakeStatuses, first: $first, filter: $after) {
+    rows: getSupplierFleetList(
+      owners: $owners
+      stakeStatuses: $stakeStatuses
+      maxStakeUpokt: $maxStakeUpokt
+      rowLimit: $rowLimit
+      afterStakeUpokt: $afterStakeUpokt
+      afterSupplierId: $afterSupplierId
+    ) {
       supplierId
       ownerId
       stakeUpokt
       stakeStatus
       serviceCount
     }
-    count: getSupplierFleetList(owners: $owners, stakeStatuses: $stakeStatuses, bySupplier: false) @skip(if: $belowMin) {
+    count: getSupplierFleetList(owners: $owners, stakeStatuses: $stakeStatuses, maxStakeUpokt: $maxStakeUpokt, bySupplier: false) {
       supplierCount
     }
-    under: getSupplierFleetList(owners: $owners, stakeStatuses: $stakeStatuses, filter: $ceiling, first: 1001) @include(if: $belowMin) {
-      supplierId
-    }
   }
 `;
 
-// The current owner of each supplier listed (a flat lookup by id).
-export const SUPPLIER_OWNERS = /* GraphQL */ `
-  query supplierOwners($ids: [String!], $first: Int) {
-    suppliers(filter: { id: { in: $ids } }, first: $first) {
-      nodes {
-        id
-        ownerId
-      }
-    }
-  }
-`;
-
-// One page of the operators' suppliers now, largest stake first (then by id), and their count, in one request. The
-// next page passes $after = the rows below the previous page's last (stake, id), a keyset: the other rows do not shift
-// as they do with OFFSET, but a supplier whose stake crosses the page boundary between two reads (a slash, a top-up) can
-// be shown twice or missed; the tabs flag both (useCursorPages). serviceCount is the number of services the supplier has
-// a live config for.
+// One page of the operators' suppliers now, largest stake first (then by id), and their count, in one request (not one
+// snapshot). The page is the fleet function's own keyset: $rowLimit rows after the previous page's last stake and id
+// ($afterStakeUpokt / $afterSupplierId), with services counted for that page only. The other rows do not shift as they
+// do with OFFSET, but a supplier whose stake crosses the page boundary between two reads (a slash, a top-up) can be shown
+// twice or missed; the tabs flag both (useCursorPages). serviceCount is the number of services the supplier has a live
+// config for.
 export const OPERATOR_SUPPLIERS = /* GraphQL */ `
-  query operatorSuppliers($operators: [String], $first: Int, $after: GetSupplierFleetRecordFilter) {
-    rows: getSupplierFleetList(operators: $operators, first: $first, filter: $after) {
+  query operatorSuppliers($operators: [String], $rowLimit: Int, $afterStakeUpokt: BigFloat, $afterSupplierId: String) {
+    rows: getSupplierFleetList(
+      operators: $operators
+      rowLimit: $rowLimit
+      afterStakeUpokt: $afterStakeUpokt
+      afterSupplierId: $afterSupplierId
+    ) {
       supplierId
       ownerId
       stakeUpokt

@@ -29,21 +29,17 @@ export interface SupplierRow {
 export interface SupplierListPage {
   rows: SupplierRow[];
   totalCount: number;
-  /** totalCount is a floor: the count stopped at its cap. */
-  totalCapped?: boolean;
   /** More rows follow this page; pass endCursor as `after` to read them. */
   hasNextPage?: boolean;
   endCursor?: string | null;
 }
 
-/** The rows that follow a page's last row (its endCursor, `stake:id`) in the fleet function's order: a smaller stake, or
- *  the same stake and a larger id. Null on the first page (the indexer refuses a null filter, so it is left out). */
-function keysetFilter(after: string | null): Record<string, unknown> | null {
-  if (!after) return null;
+/** The fleet function's keyset after a page's last row (its endCursor, `stake:id`); none on the first page. */
+function keysetArgs(after: string | null): { afterStakeUpokt?: string; afterSupplierId?: string } {
+  if (!after) return {};
   const cut = after.indexOf(':');
   if (cut <= 0) throw new Error(`supplier list: invalid cursor ${after}`);
-  const [stake, id] = [after.slice(0, cut), after.slice(cut + 1)];
-  return { or: [{ stakeUpokt: { lessThan: stake } }, { and: [{ stakeUpokt: { equalTo: stake } }, { supplierId: { greaterThan: id } }] }] };
+  return { afterStakeUpokt: after.slice(0, cut), afterSupplierId: after.slice(cut + 1) };
 }
 
 /** A non-negative decimal string (an indexer BigFloat: `60010000000`, `1.5`) as [integer part, fraction digits],
@@ -65,9 +61,9 @@ function compareDecimal(a: string | number, b: string | number): number {
   return x === y ? 0 : x < y ? -1 : 1;
 }
 
-/** A page from the rows asked for (pageSize + 1: the extra one tells whether another page follows). getSupplierFleetList
- *  takes no orderBy: the keyset relies on its own ORDER BY (stake desc, then id), so a row out of that order fails the
- *  page instead of paging wrong. */
+/** A page from the rows asked for (pageSize + 1: the extra one tells whether another page follows). The function pages
+ *  in its own order (stake desc, then id), which the keyset relies on, so a row out of that order fails the page instead
+ *  of paging wrong. */
 function toPage(all: FleetRowRaw[], pageSize: number, totalCount: number): SupplierListPage {
   for (let i = 1; i < all.length; i++) {
     const c = compareDecimal(all[i - 1].stakeUpokt, all[i].stakeUpokt);
@@ -102,30 +98,16 @@ export async function fetchOwnerSuppliers(
   revalidate = 1800,
 ): Promise<SupplierListPage> {
   const stakeStatuses = filter === 'all' ? null : filter === 'unstaking' ? ['Unstaking'] : filter === 'unstaked' ? ['Unstaked'] : ['Staked'];
-  const belowMin = filter === 'below_min';
-  // "below min stake" = Staked and at or under the current minimum (the slash-risk nodes)
-  const ceiling = belowMin ? { stakeUpokt: { lessThanOrEqualTo: String(minStakeUpokt) } } : null;
-  const conds = [keysetFilter(after), ceiling].filter((c): c is Record<string, unknown> => c !== null);
-  const data = await gqlFetch<{
-    rows: FleetRowRaw[] | null;
-    count?: Array<{ supplierCount: string | number }> | null;
-    under?: Array<{ supplierId: string }> | null;
-  }>(
+  // "below min stake" = Staked and at or under the current minimum (the slash-risk nodes); the ceiling is exclusive and
+  // stakes are whole upokt, so at or under min = below min + 1
+  const ceiling = filter === 'below_min' ? { maxStakeUpokt: (BigInt(Math.trunc(minStakeUpokt)) + BigInt(1)).toString() } : {};
+  const data = await gqlFetch<{ rows: FleetRowRaw[] | null; count: Array<{ supplierCount: string | number }> | null }>(
     NETWORK,
     OWNER_SUPPLIERS,
-    {
-      owners,
-      stakeStatuses,
-      first: pageSize + 1,
-      belowMin,
-      ...(ceiling ? { ceiling } : {}),
-      ...(conds.length ? { after: conds.length === 1 ? conds[0] : { and: conds } } : {}),
-    },
+    { owners, stakeStatuses, rowLimit: pageSize + 1, ...ceiling, ...keysetArgs(after) },
     { revalidate },
   );
-  const under = data.under?.length ?? 0;
-  const page = toPage(data.rows ?? [], pageSize, belowMin ? Math.min(under, 1000) : num(data.count?.[0]?.supplierCount));
-  return belowMin && under > 1000 ? { ...page, totalCapped: true } : page;
+  return toPage(data.rows ?? [], pageSize, num(data.count?.[0]?.supplierCount));
 }
 
 /** One page of the Staked suppliers that share revenue with the operators now, and their count: the first page, or the
@@ -136,11 +118,10 @@ export async function fetchOperatorSuppliers(
   pageSize: number,
   revalidate = 1800,
 ): Promise<SupplierListPage> {
-  const keyset = keysetFilter(after);
   const data = await gqlFetch<{ rows: FleetRowRaw[] | null; fleet: Array<{ supplierCount: string | number }> | null }>(
     NETWORK,
     OPERATOR_SUPPLIERS,
-    { operators, first: pageSize + 1, ...(keyset ? { after: keyset } : {}) },
+    { operators, rowLimit: pageSize + 1, ...keysetArgs(after) },
     { revalidate },
   );
   return toPage(data.rows ?? [], pageSize, num(data.fleet?.[0]?.supplierCount));
