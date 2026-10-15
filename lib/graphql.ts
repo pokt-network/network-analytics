@@ -43,7 +43,9 @@ export async function gqlFetch<T>(
     return settle(await postGraphql<T>(network, query, variables, opts.cache, opts.signal), opts.partial);
   }
   // The same read already on its way (generateMetadata and the page, or two panels asking alike) shares that request:
-  // unstable_cache does not join a miss in flight, where Next's fetch cache did.
+  // unstable_cache does not join a miss in flight, where Next's fetch cache did. A call with an abort signal goes its own
+  // way (still through the cache) and nobody joins it: its abort must reject it alone.
+  if (opts.signal) return cachedRead<T>(network, query, variables, opts);
   const key = JSON.stringify([network, query, variables ?? null, opts.revalidate, opts.partial ?? null]);
   const pending = inflight.get(key);
   if (pending) return pending as Promise<T>;
