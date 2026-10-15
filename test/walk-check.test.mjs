@@ -73,3 +73,28 @@ test('a failed probe at the cap keeps the rows read, as not known to be complete
     globalThis.fetch = realFetch;
   }
 });
+
+test('an export walk pins its window once: every page and the probe carry the same at', async () => {
+  const { walkPages, pinnedPageUrl } = await import('../lib/cursor-pages.ts');
+  const realFetch = globalThis.fetch;
+  const urls = [];
+  globalThis.fetch = async (url) => {
+    urls.push(url);
+    const q = new URL(url, 'http://x').searchParams;
+    const size = Number(q.get('pageSize'));
+    const after = Number(q.get('after') ?? 0);
+    const n = Math.max(0, Math.min(size, 5000 - after));
+    const rows = Array.from({ length: n }, (_, i) => after + i);
+    return new Response(JSON.stringify({ rows, hasNextPage: n === size, endCursor: n ? String(after + n) : null }), { status: 200 });
+  };
+  try {
+    const at = Date.parse('2026-10-15T12:07:00Z');
+    const walk = await walkPages(pinnedPageUrl('/api/operator/slashing?addresses=a&range=60d', at), 1000, 5000, 6, true);
+    assert.equal(walk.rows.length, 5000);
+    assert.equal(walk.complete, true);
+    assert.equal(urls.length, 6); // 5 pages + the probe
+    assert.deepEqual([...new Set(urls.map((u) => new URL(u, 'http://x').searchParams.get('at')))], [String(at)]);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

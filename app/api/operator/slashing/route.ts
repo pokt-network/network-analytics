@@ -32,6 +32,13 @@ export async function GET(req: NextRequest) {
   // present but empty or malformed is an error, never read as the first page.
   const after = req.nextUrl.searchParams.get('after');
   if (after !== null && !CURSOR_RE.test(after)) return NextResponse.json({ error: 'invalid after cursor' }, { status: 400 });
+  // at=<ms>: the instant an export walk pinned its window to, so every page of the walk (and its probe) reads the same
+  // window; a whole minute, at most an hour old (each value is a cache key)
+  const atParam = req.nextUrl.searchParams.get('at');
+  const at = atParam === null ? null : Number(atParam);
+  if (at !== null && !(/^\d+$/.test(atParam!) && at % 60_000 === 0 && at <= Date.now() + 60_000 && at >= Date.now() - 3_600_000)) {
+    return NextResponse.json({ error: 'invalid at' }, { status: 400 });
+  }
 
   if (addresses.length === 0) {
     return NextResponse.json({
@@ -39,7 +46,7 @@ export async function GET(req: NextRequest) {
     } satisfies SlashPage);
   }
   // both keys carry the window's 60 s bucket (slashCacheKeys), and the functions read that same window
-  const keys = slashCacheKeys(addresses, range, { after, pageSize, lookahead });
+  const keys = slashCacheKeys(addresses, range, { after, pageSize, lookahead }, at ?? Date.now());
   const [totals, page] = await Promise.all([
     // 60 s: the key changes with the window's 60 s bucket, so a longer TTL would never be reached
     unstable_cache(() => getOperatorSlashTotals(addresses, range, keys.now), keys.totals, { revalidate: 60 })(),

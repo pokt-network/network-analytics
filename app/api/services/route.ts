@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { unstable_cache } from 'next/cache';
+import { rangeCacheKey } from '@/lib/cache-keys';
 import { getServiceDetail } from '@/lib/data/services';
 import { rangeTTL } from '@/lib/timeranges';
 import { DEFAULT_RANGE, isRangeKey, type RangeKey } from '@/lib/app-config';
@@ -12,7 +13,7 @@ export async function GET(req: NextRequest) {
   const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
 
   return diagJson('service', () =>
-    unstable_cache(stamped(() => getServiceDetail(serviceId, range)), ['service', serviceId, range], {
+    unstable_cache(stamped(() => getServiceDetail(serviceId, range)), rangeCacheKey(['service', serviceId], range, rangeTTL(range)).key, {
       revalidate: rangeTTL(range),
     })(),
   );

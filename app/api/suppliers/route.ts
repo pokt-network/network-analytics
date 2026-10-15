@@ -1,5 +1,6 @@
 import { type NextRequest } from 'next/server';
 import { unstable_cache } from 'next/cache';
+import { rangeCacheKey } from '@/lib/cache-keys';
 import { getSnapshots } from '@/lib/data/snapshots';
 import { getDomainTable, type DomainRow } from '@/lib/data/suppliers';
 import { getServicesPerformance } from '@/lib/data/traffic';
@@ -96,7 +97,7 @@ export async function GET(req: NextRequest) {
   // changes. The Vercel Data Cache persists across deploys, so without a new key a new deployment
   // would serve old-shaped entries to new client code (→ runtime crash on the missing fields).
   return diagJson('suppliers', () =>
-    unstable_cache(stamped(() => buildSuppliers(range)), ['suppliers', 'sup-v2', range], {
+    unstable_cache(stamped(() => buildSuppliers(range)), rangeCacheKey(['suppliers', 'sup-v2'], range, rangeTTL(range)).key, {
       revalidate: rangeTTL(range),
       tags: warmTag(range),
     })(),

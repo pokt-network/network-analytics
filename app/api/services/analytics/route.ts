@@ -1,5 +1,6 @@
 import { type NextRequest } from 'next/server';
 import { unstable_cache } from 'next/cache';
+import { rangeCacheKey } from '@/lib/cache-keys';
 import { getServicesPerformance } from '@/lib/data/traffic';
 import { rangeTTL } from '@/lib/timeranges';
 import { DEFAULT_RANGE, isRangeKey, warmTag, type RangeKey } from '@/lib/app-config';
@@ -32,7 +33,7 @@ export async function GET(req: NextRequest) {
         })) satisfies ServiceAnalyticsRow[];
         return { services };
       }),
-      ['services-analytics', range],
+      rangeCacheKey(['services-analytics'], range, rangeTTL(range)).key,
       { revalidate: rangeTTL(range), tags: warmTag(range) },
     )(),
   );

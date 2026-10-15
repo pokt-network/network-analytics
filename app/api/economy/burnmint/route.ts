@@ -1,5 +1,6 @@
 import { type NextRequest } from 'next/server';
 import { unstable_cache } from 'next/cache';
+import { rangeCacheKey } from '@/lib/cache-keys';
 import { getBurnMint, getMintRatio, type BurnMintPoint } from '@/lib/data/economy';
 import { rangeWindow, rangeTTL } from '@/lib/timeranges';
 import { DEFAULT_RANGE, isRangeKey, warmTag, type RangeKey } from '@/lib/app-config';
@@ -28,7 +29,7 @@ export async function GET(req: NextRequest) {
   const rangeParam = req.nextUrl.searchParams.get('range');
   const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
   return diagJson('economy-burnmint', () =>
-    unstable_cache(stamped(() => buildBurnMint(range)), ['economy-burnmint', range], {
+    unstable_cache(stamped(() => buildBurnMint(range)), rangeCacheKey(['economy-burnmint'], range, rangeTTL(range)).key, {
       revalidate: rangeTTL(range),
       tags: warmTag(range),
     })(),

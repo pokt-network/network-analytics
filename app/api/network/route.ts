@@ -1,5 +1,6 @@
 import { type NextRequest } from 'next/server';
 import { unstable_cache } from 'next/cache';
+import { rangeCacheKey } from '@/lib/cache-keys';
 import { getSnapshots } from '@/lib/data/snapshots';
 import { getClaimProofs, type ClaimProofPoint } from '@/lib/data/claims';
 import { getSupplyHistory } from '@/lib/data/economy';
@@ -75,7 +76,7 @@ export async function GET(req: NextRequest) {
   const rangeParam = req.nextUrl.searchParams.get('range');
   const range: RangeKey = isRangeKey(rangeParam) ? rangeParam : DEFAULT_RANGE;
   return diagJson('network', () =>
-    unstable_cache(stamped(() => buildNetwork(range)), ['network', range], {
+    unstable_cache(stamped(() => buildNetwork(range)), rangeCacheKey(['network'], range, rangeTTL(range)).key, {
       revalidate: rangeTTL(range),
       tags: warmTag(range),
     })(),

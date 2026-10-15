@@ -138,3 +138,9 @@ export async function walkPages<R>(
   }
   return { rows, complete: false };
 }
+
+/** The page url builder of an export walk over a windowed route: every page and the probe carry the same `at`, the
+ *  minute the walk pinned its window to when it started, so a walk that crosses a minute does not move its window. */
+export function pinnedPageUrl(base: string, at: number): (after: string | null, size: number) => string {
+  return (after, size) => `${base}&lookahead=0&at=${at}&pageSize=${size}${after ? `&after=${encodeURIComponent(after)}` : ''}`;
+}

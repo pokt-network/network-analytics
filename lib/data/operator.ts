@@ -3,6 +3,7 @@ import { toDate } from '@/lib/time';
 import { UPOKT_PER_POKT } from '@/lib/config';
 import { NETWORK, type RangeKey } from '@/lib/app-config';
 import { rangeWindow, rangeTTL } from '@/lib/timeranges';
+import { rangeCacheKey } from '@/lib/cache-keys';
 import {
   OPERATOR_CLAIMS_SETTLED,
   OPERATOR_CLAIM_PENALTIES,
@@ -382,12 +383,14 @@ export function slashCacheKeys(
   page: { after: string | null; pageSize: number; lookahead: boolean },
   at: number = Date.now(),
 ): { now: number; totals: string[]; page: string[] } {
-  const end = rangeWindow(range, at).endISO;
+  // the 60 s bucket is the window's own minute (rangeWindow floors `now` to it)
   const ops = addresses.join(',');
+  const totals = rangeCacheKey(['operator-slash-totals', ops], range, 60, at);
+  const pageKey = rangeCacheKey(['operator-slash-page', ops], range, 60, at);
   return {
-    now: Date.parse(end),
-    totals: ['operator-slash-totals', ops, range, end],
-    page: ['operator-slash-page', ops, range, end, page.after ?? '', String(page.pageSize), page.lookahead ? 'pager' : 'export'],
+    now: totals.now,
+    totals: totals.key,
+    page: [...pageKey.key, page.after ?? '', String(page.pageSize), page.lookahead ? 'pager' : 'export'],
   };
 }
 

@@ -1,5 +1,6 @@
 import { type NextRequest } from 'next/server';
 import { unstable_cache } from 'next/cache';
+import { rangeCacheKey } from '@/lib/cache-keys';
 import { getTrafficSeries, getServicesPerformance, type TrafficSeries, type ServicePerf } from '@/lib/data/traffic';
 import { getCachedRolling24hStats, type Rolling24h } from '@/lib/data/rewards';
 import { getLatestSnapshot } from '@/lib/data/snapshots';
@@ -72,7 +73,7 @@ export async function GET(req: NextRequest) {
   // with each other. Merged here, both surfaces read one entry and cannot drift apart.
   return diagJson('traffic', async () => {
     const [cached, rolling] = await Promise.all([
-      unstable_cache(stamped(() => buildTraffic(range)), ['traffic', range], {
+      unstable_cache(stamped(() => buildTraffic(range)), rangeCacheKey(['traffic'], range, rangeTTL(range)).key, {
         revalidate: rangeTTL(range),
         tags: warmTag(range),
       })(),

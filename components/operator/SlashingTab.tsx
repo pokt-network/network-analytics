@@ -5,7 +5,7 @@ import { IconReceipt, IconDownload } from '@tabler/icons-react';
 import { EXPLORER_BASE_URL } from '@/lib/app-config';
 import { UPOKT_PER_POKT } from '@/lib/config';
 import { useStakingTool } from '@/components/staking/StakingToolContext';
-import { useCursorPages, walkPages } from '@/lib/cursor-pages';
+import { pinnedPageUrl, useCursorPages, walkPages } from '@/lib/cursor-pages';
 import type { SlashPage, SlashRow } from '@/lib/data/operator';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { ChartSkeleton, EmptyState } from '@/components/ui/states';
@@ -50,7 +50,8 @@ export function SlashingTab() {
     setExportNote(null);
     try {
       const { rows: all, complete } = await walkPages<SlashRow>(
-        (after, size) => `/api/operator/slashing?${query}&lookahead=0&pageSize=${size}${after ? `&after=${encodeURIComponent(after)}` : ''}`,
+        // the window is pinned once, at the start: every page and the probe read the same one
+        pinnedPageUrl(`/api/operator/slashing?${query}`, Math.floor(Date.now() / 60_000) * 60_000),
         EXPORT_CHUNK,
         EXPORT_CAP,
         EXPORT_MAX_CALLS,
