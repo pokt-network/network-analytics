@@ -1,40 +1,67 @@
 // Analytics resolver query strings. These `get*` resolvers return JSON/String scalars (some
 // double-encoded) — hand-authored payload types live in lib/data/*. Shapes verified live 2026-07-03.
 
-// Usage per service per bucket from the settlement catalog: the 200 services with the most settled upokt (the catalog's
-// cap; lib/data/traffic.ts refuses an answer that reaches it, 158 services were active over 30 days on 2026-10-16).
-export const RELAYS_BY_SERVICE_PER_POINT = /* GraphQL */ `
-  query relaysByServicePerPoint($start: Datetime!, $end: Datetime!, $interval: String) {
-    getServiceUsageJson(services: null, topBySettled: 200, rangeStart: $start, rangeEnd: $end, bucket: $interval)
+// get_service_usage's table arguments (pocketdex release C1): every service with usage in the window, searched by
+// $searchText (id or name), ordered by $orderBy / $orderDir, $pageSize rows from $offset, each with its estimated compute units
+// in the previous window from $compareStart (the Change column). total_services on each row counts the matching services.
+const PAGE_ARGS = 'rowLimit: $pageSize, rowOffset: $offset, orderBy: $orderBy, orderDir: $orderDir, searchText: $searchText, compareStart: $compareStart, withDetails: true';
+const PAGE_VARS = '$pageSize: Int!, $offset: Int!, $orderBy: String!, $orderDir: String!, $searchText: String, $compareStart: Datetime';
+
+// One page of a services table with the network total (every service, summed by the indexer) its shares divide by.
+export const SERVICES_USAGE_PAGE = /* GraphQL */ `
+  query servicesUsagePage($start: Datetime!, $end: Datetime!, ${PAGE_VARS}) {
+    total: getServiceUsageJson(services: null, byService: false, rangeStart: $start, rangeEnd: $end)
+    page: getServiceUsageJson(services: null, ${PAGE_ARGS}, rangeStart: $start, rangeEnd: $end)
   }
 `;
 
-// One service's usage per bucket (the service detail chart).
-export const SERVICE_USAGE_ONE = /* GraphQL */ `
-  query serviceUsageOne($service: String!, $start: Datetime!, $end: Datetime!, $interval: String) {
-    getServiceUsageJson(services: [$service], rangeStart: $start, rangeEnd: $end, bucket: $interval)
+// The Traffic tab's first view in one request: the network total per bucket, the top services' series (by estimated
+// compute units, as the chart always ranked them) and the first page of the Service Performance table.
+export const TRAFFIC_OVERVIEW = /* GraphQL */ `
+  query trafficOverview($start: Datetime!, $end: Datetime!, $interval: String, $seriesTop: Int!, ${PAGE_VARS}) {
+    total: getServiceUsageJson(services: null, byService: false, rangeStart: $start, rangeEnd: $end, bucket: $interval)
+    series: getServiceUsageJson(
+      services: null
+      rowLimit: $seriesTop
+      rowOffset: 0
+      orderBy: "estimated_compute_units"
+      orderDir: "desc"
+      rangeStart: $start
+      rangeEnd: $end
+      bucket: $interval
+    )
+    page: getServiceUsageJson(services: null, ${PAGE_ARGS}, rangeStart: $start, rangeEnd: $end)
   }
 `;
 
-// Per service over a window and the equal-length one before it (the service usage, top 200 services by settled upokt),
-// with the staked suppliers and applications now and the service names, in one request: every service with activity is in
-// `cur`, `prev` has no rows for a quiet service.
-export const SERVICES_PERFORMANCE = /* GraphQL */ `
-  query servicesPerformance($endCurrent: Datetime!, $mid: Datetime!, $startPrev: Datetime!) {
-    cur: getServiceUsageJson(services: null, topBySettled: 200, rangeStart: $mid, rangeEnd: $endCurrent)
-    prev: getServiceUsageJson(services: null, topBySettled: 200, rangeStart: $startPrev, rangeEnd: $mid)
-    summary: getServiceSummaryList {
-      serviceId
-      stakedSuppliers
-      stakedApplications
-    }
-    names: services(first: 1000, orderBy: ID_ASC) {
-      totalCount
-      nodes {
-        id
-        name
-      }
-    }
+// The services the user picked for the chart (at most 20), per bucket.
+export const TRAFFIC_SERIES = /* GraphQL */ `
+  query trafficSeries($services: [String!]!, $start: Datetime!, $end: Datetime!, $interval: String) {
+    getServiceUsageJson(services: $services, rangeStart: $start, rangeEnd: $end, bucket: $interval)
+  }
+`;
+
+// One service's detail: its row (name, staked counts, totals), the network total for its share, and its series.
+export const SERVICE_DETAIL = /* GraphQL */ `
+  query serviceDetail($service: String!, $start: Datetime!, $end: Datetime!, $interval: String) {
+    row: getServiceUsageJson(services: [$service], withDetails: true, rangeStart: $start, rangeEnd: $end)
+    total: getServiceUsageJson(services: null, byService: false, rangeStart: $start, rangeEnd: $end)
+    series: getServiceUsageJson(services: [$service], rangeStart: $start, rangeEnd: $end, bucket: $interval)
+  }
+`;
+
+// The network total over a window, or per bucket: the 24h stat cards (per hour) and the Suppliers tab (its
+// staked_suppliers, summed over the services with usage in the window).
+export const NETWORK_USAGE = /* GraphQL */ `
+  query networkUsage($start: Datetime!, $end: Datetime!, $interval: String) {
+    getServiceUsageJson(services: null, byService: false, rangeStart: $start, rangeEnd: $end, bucket: $interval)
+  }
+`;
+
+// The same total with the staked counts (withDetails reads the live service configs): Σ staked_suppliers for the Suppliers tab.
+export const NETWORK_USAGE_STAKED = /* GraphQL */ `
+  query networkUsageStaked($start: Datetime!, $end: Datetime!, $interval: String) {
+    getServiceUsageJson(services: null, byService: false, withDetails: true, rangeStart: $start, rangeEnd: $end, bucket: $interval)
   }
 `;
 

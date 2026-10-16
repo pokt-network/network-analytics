@@ -2,9 +2,10 @@ import { staleValue } from '@/lib/window-cache';
 import { gqlFetch } from '@/lib/graphql';
 import { toDate } from '@/lib/time';
 import { NETWORK } from '@/lib/app-config';
-import { REWARDS_BY_DATE } from '@/lib/queries/analytics';
+import { NETWORK_USAGE, REWARDS_BY_DATE } from '@/lib/queries/analytics';
 import { fixedWindow } from '@/lib/timeranges';
 import { num, parseScalar } from './_util';
+import { unwrapRange } from './coverage';
 
 // Network-wide rewards/relays/CU over time (getRewardsByDate). Backs the Network-wide series and
 // the Traffic 24h stat deltas. Both claimed and estimated present; caller picks which to show.
@@ -59,11 +60,21 @@ export interface Rolling24h {
   cu24hChange: number;
 }
 
-/** Trailing 24h vs prior 24h, summed from hourly buckets (estimated = demand signal).
- *  Prefer `getCachedRolling24hStats` from route handlers so every surface reads one cache entry. */
+/** Trailing 24h vs prior 24h, summed from hourly buckets of the network total (every service, summed by the indexer;
+ *  estimated = demand signal). Prefer `getCachedRolling24hStats` from route handlers so every surface reads one cache entry. */
 export async function getRolling24hStats(): Promise<Rolling24h> {
   const { startISO, endISO } = fixedWindow(48 * 3600);
-  const pts = await getRewardsByDate(startISO, endISO, 'hour', 60);
+  const data = await gqlFetch<{ getServiceUsageJson: unknown }>(
+    NETWORK,
+    NETWORK_USAGE,
+    { start: startISO, end: endISO, interval: 'hour' },
+    { revalidate: 60 },
+  );
+  const pts = (unwrapRange<Array<{ bucket_start: string; estimated_relays: unknown; estimated_compute_units: unknown }>>(parseScalar(data.getServiceUsageJson), false).data ?? []).map((p) => ({
+    date: toDate(p.bucket_start)?.toISOString() ?? p.bucket_start,
+    estimatedRelays: num(p.estimated_relays),
+    estimatedComputedUnits: num(p.estimated_compute_units),
+  }));
   // Split on the *bucketed* window end, not raw Date.now(). fixedWindow quantizes its edges to
   // WINDOW_BUCKET_MS; using Date.now() here would drift the cut point up to a bucket away from the
   // window it is dividing, so the "current" half could be slightly longer than the prior half.

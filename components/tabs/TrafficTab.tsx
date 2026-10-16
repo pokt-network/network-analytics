@@ -5,7 +5,9 @@ import { IconBolt, IconCpu, IconStack2, IconServer2, IconChartLine, IconTable, I
 import { type RangeKey, SERIES_COLORS, NETWORK_TOTAL_COLOR } from '@/lib/app-config';
 import { useTabData } from '@/lib/use-tab-data';
 import type { TrafficResponse } from '@/app/api/traffic/route';
-import type { ServicePerf } from '@/lib/data/traffic';
+import type { PerfPage, ServicePerf } from '@/lib/data/traffic';
+import { SERIES_MAX, PERF_PAGE_SIZE } from '@/lib/traffic-limits';
+import { allUsageRows, usageUrl, type ColumnOrders } from '@/lib/services-table';
 import { formatCompact, formatNumber } from '@/lib/format';
 import { StatCard, type Trend } from '@/components/ui/StatCard';
 import { Card, CardHeader, CardTag } from '@/components/ui/Card';
@@ -13,11 +15,22 @@ import { TimeChart, type SeriesDef, type ChartType } from '@/components/charts/T
 import { ChartTypeToggle } from '@/components/charts/ChartTypeToggle';
 import { ChartCsvButton } from '@/components/charts/ChartCsvButton';
 import { DonutChart, type DonutDatum } from '@/components/charts/DonutChart';
-import { DataTable, type Column } from '@/components/ui/DataTable';
+import { DataTable, type Column, type TableState } from '@/components/ui/DataTable';
 import { MultiSelect, type MultiOption } from '@/components/ui/MultiSelect';
 import { ChartSkeleton, ErrorState } from '@/components/ui/states';
 
 const TOTAL_KEY = 'total';
+
+// The Service Performance columns' server orders (the old client sort keys, ties by estimated CU as before).
+const PERF_ORDERS: ColumnOrders = {
+  service: 'service_id',
+  label: 'name',
+  net: 'estimated_compute_units',
+  change: 'change',
+  cu: 'estimated_compute_units',
+  relays: 'estimated_relays',
+};
+const DEFAULT_TABLE: TableState = { page: 1, sortKey: 'net', sortDir: 'desc', query: '' };
 
 // Human "in the last …" phrase for the active-range window.
 const RANGE_DURATION: Record<RangeKey, string> = {
@@ -43,37 +56,65 @@ export function TrafficTab({ range, onOpenService }: { range: RangeKey; onOpenSe
   // User's service selection, scoped to the range it was made in (so a range switch falls back to
   // the fresh default without a state-syncing effect).
   const [selOverride, setSelOverride] = useState<{ range: RangeKey; set: Set<string> } | null>(null);
+  // Service Performance: the table's search, sort and page, read by the server; the default view (first page, Net %
+  // desc, no search) comes with /api/traffic.
+  const [table, setTable] = useState<TableState>(DEFAULT_TABLE);
+  const isDefault = table.page === 1 && table.sortKey === 'net' && table.sortDir === 'desc' && !table.query.trim();
+  const pageData = useTabData<PerfPage>(isDefault ? '' : usageUrl(range, table, PERF_PAGE_SIZE, PERF_ORDERS), { prefetchSiblings: false });
+  // The active services in ranking order for the selector (read in pages by the server), read when the selector opens.
+  const [listWanted, setListWanted] = useState(false);
+  const serviceList = useTabData<{ services: Array<{ id: string; total: number }> }>(listWanted ? `/api/traffic/services?range=${range}` : '', {
+    prefetchSiblings: false,
+  });
 
-  // Stable color per service by its rank in the window.
+  const topIds = useMemo(() => data?.series.services.map((s) => s.id) ?? [], [data]);
+
+  // Stable color per service by its rank in the window (the top services' ranks are known before the list is read).
   const colorFor = useMemo(() => {
     const m = new Map<string, string>();
-    data?.series.services.forEach((s, i) => m.set(s.id, SERIES_COLORS[i % SERIES_COLORS.length]));
+    const ranked = serviceList.data?.services.map((s) => s.id) ?? topIds;
+    ranked.forEach((id, i) => m.set(id, SERIES_COLORS[i % SERIES_COLORS.length]));
     return m;
-  }, [data]);
+  }, [topIds, serviceList.data]);
 
   // Default selection: top 5 services (network total is controlled separately).
-  const defaultSel = useMemo(() => {
-    const top5 = data?.series.services.slice(0, 5).map((s) => s.id) ?? [];
-    return new Set<string>(top5);
-  }, [data]);
+  const defaultSel = useMemo(() => new Set<string>(topIds), [topIds]);
+  const sel = selOverride && selOverride.range === range ? selOverride.set : defaultSel;
+
+  // Picked services outside the top ones are read on their own (at most 20 in the chart at once).
+  const extraIds = [...sel].filter((id) => !topIds.includes(id)).sort();
+  const extra = useTabData<{ rows: Array<Record<string, number | string>> }>(
+    extraIds.length ? `/api/traffic/series?range=${range}&services=${extraIds.map(encodeURIComponent).join(',')}` : '',
+    { prefetchSiblings: false },
+  );
 
   if (error) return <ErrorState>Couldn’t load traffic data: {error}</ErrorState>;
   if (!data) return <TabLoading />;
 
-  const sel = selOverride && selOverride.range === range ? selOverride.set : defaultSel;
-
-  const chartSeries: SeriesDef[] = [];
-  if (showTotal) chartSeries.push({ key: TOTAL_KEY, color: NETWORK_TOTAL_COLOR, label: 'Network total' });
-  for (const s of data.series.services) {
-    if (sel.has(s.id)) chartSeries.push({ key: s.id, color: colorFor.get(s.id)!, label: s.id });
+  // The picked services' points joined to the network total and top services' rows by date.
+  let chartRows = data.series.rows;
+  if (extraIds.length && extra.data) {
+    const byDate = new Map(chartRows.map((r) => [String(r.date), { ...r }]));
+    for (const r of extra.data.rows) byDate.set(String(r.date), { ...(byDate.get(String(r.date)) ?? { date: r.date }), ...r });
+    chartRows = [...byDate.keys()].sort().map((d) => byDate.get(d)!);
   }
 
-  const msOptions: MultiOption[] = data.series.services.map((s) => ({ id: s.id, label: s.id, color: colorFor.get(s.id)! }));
+  const color = (id: string) => colorFor.get(id) ?? NETWORK_TOTAL_COLOR;
+  const chartSeries: SeriesDef[] = [];
+  if (showTotal) chartSeries.push({ key: TOTAL_KEY, color: NETWORK_TOTAL_COLOR, label: 'Network total' });
+  // in ranking order, as the legend always was
+  const ranked = serviceList.data?.services.map((s) => s.id) ?? topIds;
+  for (const id of [...ranked, ...extraIds.filter((x) => !ranked.includes(x))]) {
+    if (sel.has(id)) chartSeries.push({ key: id, color: color(id), label: id });
+  }
+
+  const msOptions: MultiOption[] = ranked.map((id) => ({ id, label: id, color: color(id) }));
+  const perf: PerfPage = !isDefault && pageData.data ? pageData.data : data.performance;
 
   const donutData: DonutDatum[] = data.donut.map((d) => ({
     name: d.name,
     value: d.sharePct,
-    color: d.serviceId === '__others__' ? NETWORK_TOTAL_COLOR : (colorFor.get(d.serviceId) ?? NETWORK_TOTAL_COLOR),
+    color: d.serviceId === '__others__' ? NETWORK_TOTAL_COLOR : color(d.serviceId),
   }));
 
   const columns: Column<ServicePerf>[] = [
@@ -186,26 +227,27 @@ export function TrafficTab({ range, onOpenService }: { range: RangeKey; onOpenSe
                 Show network total
               </label>
               <ChartTypeToggle value={chartType} onChange={setChartType} options={['line', 'bar']} />
-              <ChartCsvButton data={data.series.rows} series={chartSeries} name="traffic-over-time" range={range} />
+              <ChartCsvButton data={chartRows} series={chartSeries} name="traffic-over-time" range={range} />
               <MultiSelect
                 options={msOptions}
                 selected={sel}
                 onToggle={(id) => {
                   const next = new Set(sel);
                   if (next.has(id)) next.delete(id);
-                  else next.add(id);
+                  else if (next.size < SERIES_MAX) next.add(id);
                   setSelOverride({ range, set: next });
                 }}
                 onSelectAll={(ids, select) => {
                   const next = new Set(sel);
                   for (const id of ids) {
-                    if (select) next.add(id);
-                    else next.delete(id);
+                    if (!select) next.delete(id);
+                    else if (next.size < SERIES_MAX) next.add(id);
                   }
                   setSelOverride({ range, set: next });
                 }}
-                selectAllLabel="All"
-                buttonLabel={`Services (${sel.size})`}
+                onOpen={() => setListWanted(true)}
+                selectAllLabel={`All (up to ${SERIES_MAX})`}
+                buttonLabel={`Services (${sel.size}/${SERIES_MAX})`}
               />
             </div>
           }
@@ -218,9 +260,9 @@ export function TrafficTab({ range, onOpenService }: { range: RangeKey; onOpenSe
             </span>
           ))}
         </div>
-        <TimeChart data={data.series.rows} series={chartSeries} interval={data.series.interval} type={chartType} projected height={360} />
+        <TimeChart data={chartRows} series={chartSeries} interval={data.series.interval} type={chartType} projected height={360} />
         <p className="mt-2 text-[12px] italic text-text-tertiary">
-          Default view: network total + top 5 services. Use the Services control to toggle any of the {data.series.services.length} sources. Estimated computed units (demand signal)
+          Default view: network total + top 5 services. Use the Services control to show up to {SERIES_MAX} of the {stats.activeServices} active services. Estimated computed units (demand signal)
           {data.series.interval !== 'hour' && '; the current day is dashed/projected to its full-day estimate'}.
         </p>
       </Card>
@@ -234,14 +276,15 @@ export function TrafficTab({ range, onOpenService }: { range: RangeKey; onOpenSe
             tag={`${range} · change vs prev period`}
           />
           <DataTable
-            rows={data.performance}
+            rows={perf.rows}
             columns={columns}
             rowKey={(r) => r.serviceId}
             searchText={(r) => `${r.serviceId} ${r.serviceName}`}
             searchPlaceholder="Search service…"
             initialSortKey="net"
             initialSortDir="desc"
-            pageSize={10}
+            pageSize={PERF_PAGE_SIZE}
+            server={{ total: perf.totalServices, onState: setTable, exportRows: (s) => allUsageRows(range, s, PERF_ORDERS) }}
             unit="services"
             csvName="service-performance"
             range={range}

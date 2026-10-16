@@ -1,6 +1,6 @@
 import { type NextRequest } from 'next/server';
 import { rangeCached } from '@/lib/window-cache';
-import { getTrafficSeries, getServicesPerformance, type TrafficSeries, type ServicePerf } from '@/lib/data/traffic';
+import { getTrafficOverview, type PerfPage } from '@/lib/data/traffic';
 import { getCachedRolling24hStats, type Rolling24h } from '@/lib/data/rewards';
 import { getLatestSnapshot } from '@/lib/data/snapshots';
 import { getServicesCount } from '@/lib/data/services-meta';
@@ -27,39 +27,27 @@ export interface DonutSlice {
 export interface TrafficResponse {
   range: RangeKey;
   stats: TrafficStats;
-  series: TrafficSeries;
-  performance: ServicePerf[];
+  /** The network total and the top services, per bucket. */
+  series: { interval: 'hour' | 'day' | 'week'; rows: Array<Record<string, number | string>>; services: Array<{ id: string; total: number }> };
+  /** The Service Performance table's first page; later pages come from /api/services/usage. */
+  performance: PerfPage;
   donut: DonutSlice[];
 }
 
 async function buildTraffic(range: RangeKey, now: number): Promise<TrafficBase> {
   // Everything here is range-dependent, so it is safe to cache under the range key. The 24h stat
   // cards are a fixed rolling window (brief §5.1) and are deliberately NOT built here — see GET.
-  const [series, performance, snapshot, totalServices] = await Promise.all([
-    getTrafficSeries(range, now),
-    getServicesPerformance(range, now),
-    getLatestSnapshot(),
-    getServicesCount(),
-  ]);
+  const [overview, snapshot, totalServices] = await Promise.all([getTrafficOverview(range, now), getLatestSnapshot(), getServicesCount()]);
 
   const stats: TrafficBase['stats'] = {
-    activeServices: series.services.length,
+    activeServices: overview.page.totalServices,
     totalServices,
     servingSuppliers: snapshot?.stakedSuppliers ?? null,
   };
 
-  // Distribution donut: top 6 services by CU share this window + an aggregated "others" slice.
-  const TOP = 6;
-  const top = performance.slice(0, TOP).map((p) => ({
-    serviceId: p.serviceId,
-    name: p.serviceName || p.serviceId,
-    sharePct: p.sharePct,
-  }));
-  const othersShare = performance.slice(TOP).reduce((s, p) => s + p.sharePct, 0);
-  const donut: DonutSlice[] =
-    othersShare > 0 ? [...top, { serviceId: '__others__', name: 'others', sharePct: othersShare }] : top;
-
-  return { range, stats, series, performance, donut };
+  // Distribution donut: top 6 services by CU share this window + "others", the rest of the network total.
+  const { interval, rows, services, page: performance, donut } = overview;
+  return { range, stats, series: { interval, rows, services }, performance, donut };
 }
 
 export async function GET(req: NextRequest) {
@@ -72,7 +60,7 @@ export async function GET(req: NextRequest) {
   // with each other. Merged here, both surfaces read one entry and cannot drift apart.
   return diagJson('traffic', async () => {
     const [cached, rolling] = await Promise.all([
-      rangeCached(['traffic', 'w1'], range, rangeTTL(range), (now) => buildTraffic(range, now), warmTag(range)),
+      rangeCached(['traffic', 'w2'], range, rangeTTL(range), (now) => buildTraffic(range, now), warmTag(range)),
       getCachedRolling24hStats(),
     ]);
     const payload: TrafficResponse = { ...cached.data, stats: { ...cached.data.stats, ...rolling } };

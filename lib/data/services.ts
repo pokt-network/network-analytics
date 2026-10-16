@@ -3,8 +3,7 @@ import { toDate } from '@/lib/time';
 import { UPOKT_PER_POKT } from '@/lib/config';
 import { NETWORK, type RangeKey } from '@/lib/app-config';
 import { rangeWindow, rangeTTL } from '@/lib/timeranges';
-import { SERVICES_FIRST_PAGE, SERVICES_LIST, SERVICE_USAGE_ONE } from '@/lib/queries/analytics';
-import { getServicesPerformance } from './traffic';
+import { SERVICES_FIRST_PAGE, SERVICES_LIST, SERVICE_DETAIL } from '@/lib/queries/analytics';
 import { num, parseScalar } from './_util';
 import { unwrapRange } from './coverage';
 
@@ -68,6 +67,14 @@ interface RelayPointRaw {
   settled_upokt: number | string;
 }
 
+interface ServiceRowRaw {
+  name: string | null;
+  estimated_relays: number | string;
+  estimated_compute_units: number | string;
+  staked_suppliers: number | string;
+  staked_applications: number | string;
+}
+
 export interface ServiceVolumePoint {
   date: string;
   estimatedCU: number;
@@ -80,46 +87,45 @@ export interface ServiceDetail {
   series: ServiceVolumePoint[];
 }
 
-async function getServiceVolume(serviceId: string, range: RangeKey, now?: number): Promise<{ series: ServiceVolumePoint[]; grossRewardsPokt: number }> {
+/** One service in one request: its row over the window (a service with no usage has none: zeros, as before), the
+ *  network total for its share, and its series. */
+export async function getServiceDetail(serviceId: string, range: RangeKey, now?: number): Promise<ServiceDetail> {
   const w = rangeWindow(range, now);
-  const data = await gqlFetch<{ getServiceUsageJson: unknown }>(
+  const data = await gqlFetch<{ row: unknown; total: unknown; series: unknown }>(
     NETWORK,
-    SERVICE_USAGE_ONE,
+    SERVICE_DETAIL,
     { service: serviceId, start: w.startISO, end: w.endISO, interval: w.interval },
     { revalidate: rangeTTL(range) },
   );
-  const raw = unwrapRange<RelayPointRaw[]>(parseScalar(data.getServiceUsageJson), false).data ?? [];
+  const usage = <T>(v: unknown): T[] => unwrapRange<T[]>(parseScalar(v), false).data ?? [];
+  const p = usage<ServiceRowRaw>(data.row)[0];
+  const totalCU = usage<{ estimated_compute_units: number | string }>(data.total).reduce((s, t) => s + num(t.estimated_compute_units), 0);
   let grossUpokt = 0;
-  const series = raw
-    .map((p) => {
-      grossUpokt += num(p.settled_upokt);
+  const series = usage<RelayPointRaw>(data.series)
+    .map((pt) => {
+      grossUpokt += num(pt.settled_upokt);
       return {
-        date: toDate(p.bucket_start)?.toISOString() ?? p.bucket_start,
-        estimatedCU: num(p.estimated_compute_units),
-        estimatedRelays: num(p.estimated_relays),
+        date: toDate(pt.bucket_start)?.toISOString() ?? pt.bucket_start,
+        estimatedCU: num(pt.estimated_compute_units),
+        estimatedRelays: num(pt.estimated_relays),
       };
     })
     .sort((a, b) => a.date.localeCompare(b.date));
-  return { series, grossRewardsPokt: grossUpokt / UPOKT_PER_POKT };
-}
-
-export async function getServiceDetail(serviceId: string, range: RangeKey, now?: number): Promise<ServiceDetail> {
-  const [perf, volume] = await Promise.all([getServicesPerformance(range, now), getServiceVolume(serviceId, range, now)]);
-  const p = perf.find((x) => x.serviceId === serviceId);
+  const cu = num(p?.estimated_compute_units);
   return {
     info: {
       id: serviceId,
-      name: p?.serviceName || serviceId,
-      appsStaked: p?.appsStaked ?? 0,
-      suppliersStaked: p?.suppliersStaked ?? 0,
-      sharePct: p?.sharePct ?? 0,
+      name: p?.name || serviceId,
+      appsStaked: num(p?.staked_applications),
+      suppliersStaked: num(p?.staked_suppliers),
+      sharePct: p && totalCU ? (cu / totalCU) * 100 : 0,
     },
     stats: {
-      cu: p?.estimatedComputedUnits ?? 0,
-      relays: p?.estimatedRelays ?? 0,
-      suppliers: p?.suppliersStaked ?? 0,
-      grossRewardsPokt: volume.grossRewardsPokt,
+      cu,
+      relays: num(p?.estimated_relays),
+      suppliers: num(p?.staked_suppliers),
+      grossRewardsPokt: grossUpokt / UPOKT_PER_POKT,
     },
-    series: volume.series,
+    series,
   };
 }

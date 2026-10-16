@@ -303,7 +303,7 @@ const PROBE_ROUTES: Array<{ label: string; url: string }> = [
   { label: 'traffic', url: '/api/traffic?range=7d' },
   { label: 'network', url: '/api/network?range=7d' },
   { label: 'suppliers', url: '/api/suppliers?range=7d' },
-  { label: 'services-analytics', url: '/api/services/analytics?range=7d' },
+  { label: 'services-usage', url: '/api/services/usage?range=7d&size=50' },
   { label: 'economy', url: '/api/economy' },
   { label: 'economy-burnmint', url: '/api/economy/burnmint?range=7d' },
 ];

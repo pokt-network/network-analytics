@@ -2,7 +2,7 @@ import { type NextRequest } from 'next/server';
 import { rangeCached } from '@/lib/window-cache';
 import { getSnapshots } from '@/lib/data/snapshots';
 import { getDomainTable, type DomainRow } from '@/lib/data/suppliers';
-import { getServicesPerformance } from '@/lib/data/traffic';
+import { getActiveServiceConfigs } from '@/lib/data/traffic';
 import { rangeWindow, rangeTTL } from '@/lib/timeranges';
 import { DEFAULT_RANGE, isRangeKey, warmTag, type RangeKey } from '@/lib/app-config';
 import { UPOKT_PER_POKT } from '@/lib/config';
@@ -37,19 +37,19 @@ export interface SuppliersResponse {
 async function buildSuppliers(range: RangeKey, now: number): Promise<SuppliersResponse> {
   const w = rangeWindow(range, now);
 
-  const [snaps, domains, perf] = await Promise.all([
+  const [snaps, domains, serviceConfigs] = await Promise.all([
     getSnapshots(w.startISO, w.endISO, 3600),
     getDomainTable(),
-    getServicesPerformance(range, now),
+    getActiveServiceConfigs(range, now),
   ]);
   const latest = snaps.at(-1) ?? null;
   const first = snaps[0] ?? null;
   const totalStakedPokt = latest ? latest.supplierTokens / UPOKT_PER_POKT : 0;
   const totalSuppliers = latest?.stakedSuppliers ?? 0;
 
-  // A supplier serving N services is counted once per service in `suppliersStaked`, so the sum over
-  // services ÷ distinct suppliers = avg services the typical supplier runs.
-  const serviceConfigs = perf.reduce((s, p) => s + p.suppliersStaked, 0);
+  // A supplier serving N services is counted once per service in the staked suppliers summed over the services with
+  // usage in the window (the indexer's network total), so that sum ÷ distinct suppliers = avg services the typical
+  // supplier runs.
   const avgServicesPerSupplier = totalSuppliers > 0 ? serviceConfigs / totalSuppliers : 0;
 
   // Supplier growth across the window (first vs last daily snapshot). Null unless ≥2 snapshots.
