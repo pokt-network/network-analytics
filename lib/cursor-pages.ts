@@ -85,7 +85,8 @@ export function useCursorPages<T extends CursorPage>(
     next: () => {
       if (!nextCursor) return;
       // the walk keeps the window its first page was read at
-      if (page === 1) setPin(typeof d.data?.at === 'number' ? d.data.at : null);
+      // (a first page painted from the client cache can carry a window the route no longer accepts: it picks its own)
+      if (page === 1) setPin(typeof d.data?.at === 'number' && Date.now() - d.data.at < 55 * 60_000 ? d.data.at : null);
       setCursors((c) => [...c.slice(0, page - 1), nextCursor]);
       setPage(page + 1);
     },

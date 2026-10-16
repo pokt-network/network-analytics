@@ -142,8 +142,9 @@ async function cachedRead<T>(network: NetworkId, query: string, variables: Recor
     const got = await entry(ONE_YEAR_S);
     const age = Date.now() - got.readAt;
     if (age <= ttl * 1000 && !freshReads?.getStore()) return got.data;
-    // a failed read of it is held: the last good answer is served, and read again once the hold ends
-    if (activeHold(holdKey)) return got.data;
+    // a failed read of it is held: the last good answer is served, and read again once the hold ends (a cache rebuild
+    // asking for fresh answers is not given it: read() throws the held error, and nothing stale is stored as new)
+    if (activeHold(holdKey) && !freshReads?.getStore()) return got.data;
     // older than two revalidates, or a cache rebuild asking for fresh answers (readingFresh): read now
     if (age > 2 * ttl * 1000 || freshReads?.getStore()) return await readAndStore(half);
     const id = JSON.stringify([network, query, variables ?? null, ttl]);

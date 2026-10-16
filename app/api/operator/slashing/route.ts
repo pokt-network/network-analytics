@@ -56,7 +56,10 @@ export async function GET(req: NextRequest) {
   const keys = slashCacheKeys(addresses, range, { after, pageSize, lookahead }, at);
   const [totals, page] = await Promise.all([
     // 60 s: the key changes with the window's 60 s bucket, so a longer TTL would never be reached
-    staleValue(keys.totals, 60, () => getOperatorSlashTotals(addresses, range, keys.now)),
+    // the export walk (no lookahead) writes only the rows: it does not wait for the range's totals
+    lookahead
+      ? staleValue(keys.totals, 60, () => getOperatorSlashTotals(addresses, range, keys.now))
+      : Promise.resolve({ totalCount: 0, penaltyUpokt: '0', capped: false }),
     // the validated page is what is cached (60 s): an answer with `errors` or one that fails to process throws and is
     // not kept (the reads use no fetch cache)
     staleValue(keys.page, 60, () => getOperatorSlashPage(addresses, range, pageSize, after, lookahead, keys.now)),

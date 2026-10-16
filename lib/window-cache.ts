@@ -86,17 +86,22 @@ export function staleCached<E extends Envelope<unknown>>(
   const refresh = (built?: E) => {
     if (refreshing.has(id)) return;
     refreshing.add(id);
-    after(async () => {
-      try {
-        const value = built ?? (await fresh());
-        // The entry was built more than one TTL ago, so a read with half the TTL sees it stale and stores `value` in its
-        // place. The write keeps that revalidate as the entry's own: half a TTL, not 1 s, in case a remote data cache
-        // (Vercel's, not read here) evicts by it. Reads pass a year, so the entry's age is judged by serveCached alone.
-        await entry(Math.max(1, Math.floor(ttlSeconds / 2)), async () => value);
-      } finally {
-        refreshing.delete(id);
-      }
-    });
+    // outside a request there is no after() (it throws): the stale value is served as it is and the next read tries again
+    try {
+      after(async () => {
+        try {
+          const value = built ?? (await fresh());
+          // The entry was built more than one TTL ago, so a read with half the TTL sees it stale and stores `value` in its
+          // place. The write keeps that revalidate as the entry's own: half a TTL, not 1 s, in case a remote data cache
+          // (Vercel's, not read here) evicts by it. Reads pass a year, so the entry's age is judged by serveCached alone.
+          await entry(Math.max(1, Math.floor(ttlSeconds / 2)), async () => value);
+        } finally {
+          refreshing.delete(id);
+        }
+      });
+    } catch {
+      refreshing.delete(id);
+    }
   };
   return serveCached(() => entry(ONE_YEAR_SECONDS, fresh), fresh, refresh, ttlSeconds, tooOldAt);
 }
