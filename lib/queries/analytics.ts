@@ -1,19 +1,40 @@
 // Analytics resolver query strings. These `get*` resolvers return JSON/String scalars (some
 // double-encoded) — hand-authored payload types live in lib/data/*. Shapes verified live 2026-07-03.
 
+// Usage per service per bucket from the settlement catalog: the 200 services with the most settled upokt (the catalog's
+// cap; lib/data/traffic.ts refuses an answer that reaches it, 158 services were active over 30 days on 2026-10-16).
 export const RELAYS_BY_SERVICE_PER_POINT = /* GraphQL */ `
-  query relaysByServicePerPoint($start: Datetime, $end: Datetime, $interval: String) {
-    getRelaysByServicePerPointJson(startTimestamp: $start, endTimestamp: $end, truncInterval: $interval)
+  query relaysByServicePerPoint($start: Datetime!, $end: Datetime!, $interval: String) {
+    getServiceUsageJson(services: null, topBySettled: 200, rangeStart: $start, rangeEnd: $end, bucket: $interval)
   }
 `;
 
+// One service's usage per bucket (the service detail chart).
+export const SERVICE_USAGE_ONE = /* GraphQL */ `
+  query serviceUsageOne($service: String!, $start: Datetime!, $end: Datetime!, $interval: String) {
+    getServiceUsageJson(services: [$service], rangeStart: $start, rangeEnd: $end, bucket: $interval)
+  }
+`;
+
+// Per service over a window and the equal-length one before it (the service usage, top 200 services by settled upokt),
+// with the staked suppliers and applications now and the service names, in one request: every service with activity is in
+// `cur`, `prev` has no rows for a quiet service.
 export const SERVICES_PERFORMANCE = /* GraphQL */ `
-  query servicesPerformance($endCurrent: Datetime, $mid: Datetime, $startPrev: Datetime) {
-    servicesPerformanceBetweenTimes(
-      endCurrent: $endCurrent
-      startCurrentAndEndPrevious: $mid
-      startPrevious: $startPrev
-    )
+  query servicesPerformance($endCurrent: Datetime!, $mid: Datetime!, $startPrev: Datetime!) {
+    cur: getServiceUsageJson(services: null, topBySettled: 200, rangeStart: $mid, rangeEnd: $endCurrent)
+    prev: getServiceUsageJson(services: null, topBySettled: 200, rangeStart: $startPrev, rangeEnd: $mid)
+    summary: getServiceSummaryList {
+      serviceId
+      stakedSuppliers
+      stakedApplications
+    }
+    names: services(first: 1000, orderBy: ID_ASC) {
+      totalCount
+      nodes {
+        id
+        name
+      }
+    }
   }
 `;
 

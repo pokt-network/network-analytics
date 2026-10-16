@@ -3,21 +3,19 @@ import { toDate } from '@/lib/time';
 import { NETWORK, type RangeKey } from '@/lib/app-config';
 import { rangeWindow, rangeTTL } from '@/lib/timeranges';
 import { RELAYS_BY_SERVICE_PER_POINT, SERVICES_PERFORMANCE } from '@/lib/queries/analytics';
-import { num, parseScalar } from './_util';
+import { assertUsageNotCut, num, parseScalar } from './_util';
+import { unwrapRange } from './coverage';
 
 // ── Traffic Over Time (per service) ─────────────────────────────────────────────
-// getRelaysByServicePerPointJson returns a DOUBLE-ENCODED JSON string → parseScalar.
+// getServiceUsageJson (top 200 services by settled upokt) answers {range, data}, a JSON scalar → parseScalar.
 // Default chart metric = estimated computed units (the demand signal).
 
 interface RelayPointRaw {
-  date_truncated: string;
+  bucket_start: string;
   service_id: string;
-  relays: number | string;
-  estimated_relays: number | string;
-  computed_units: number | string;
-  estimated_computed_units: number | string;
-  claimed_upokt: number | string;
+  estimated_compute_units: number | string;
 }
+
 
 export interface TrafficSeries {
   interval: 'hour' | 'day' | 'week';
@@ -29,20 +27,21 @@ export interface TrafficSeries {
 
 export async function getTrafficSeries(range: RangeKey, now?: number): Promise<TrafficSeries> {
   const w = rangeWindow(range, now);
-  const data = await gqlFetch<{ getRelaysByServicePerPointJson: unknown }>(
+  const data = await gqlFetch<{ getServiceUsageJson: unknown }>(
     NETWORK,
     RELAYS_BY_SERVICE_PER_POINT,
     { start: w.startISO, end: w.endISO, interval: w.interval },
     { revalidate: rangeTTL(range) },
   );
-  const raw = parseScalar<RelayPointRaw[]>(data.getRelaysByServicePerPointJson);
+  const raw = unwrapRange<RelayPointRaw[]>(parseScalar(data.getServiceUsageJson), false).data ?? [];
+  assertUsageNotCut(raw.map((p) => p.service_id));
 
   const byDate = new Map<string, Record<string, number | string>>();
   const totalByService = new Map<string, number>();
 
   for (const p of raw) {
-    const dISO = toDate(p.date_truncated)?.toISOString() ?? p.date_truncated;
-    const val = num(p.estimated_computed_units);
+    const dISO = toDate(p.bucket_start)?.toISOString() ?? p.bucket_start;
+    const val = num(p.estimated_compute_units);
     let row = byDate.get(dISO);
     if (!row) {
       row = { date: dISO, total: 0 };
@@ -62,20 +61,24 @@ export async function getTrafficSeries(range: RangeKey, now?: number): Promise<T
 }
 
 // ── Service Performance (table + distribution donut) ────────────────────────────
-// servicesPerformanceBetweenTimes: `change` is precomputed current-vs-previous (why it takes 3
-// timestamps). Native array (not double-encoded), but coerce defensively.
+// One request with the window's and the previous window's usage per service (getServiceUsageJson), the staked
+// suppliers and applications now (getServiceSummaryList) and the service names. `change` is current vs previous
+// estimated compute units, 1 when the previous window has none; the window's own services are those with settled
+// claims in it, as before.
 
-interface PerfRaw {
-  change: number | string;
-  relays: number | string;
+interface UsageRaw {
   service_id: string;
-  service_name: string;
-  apps_staked: number | string;
-  claimed_upokt: number | string;
-  computed_units: number | string;
+  relays: number | string;
   estimated_relays: number | string;
-  suppliers_staked: number | string;
-  estimated_computed_units: number | string;
+  compute_units: number | string;
+  estimated_compute_units: number | string;
+  settled_upokt: number | string;
+}
+
+interface SummaryRaw {
+  serviceId: string;
+  stakedSuppliers: number | string;
+  stakedApplications: number | string;
 }
 
 export interface ServicePerf {
@@ -96,27 +99,42 @@ export interface ServicePerf {
 
 export async function getServicesPerformance(range: RangeKey, now?: number): Promise<ServicePerf[]> {
   const w = rangeWindow(range, now);
-  const data = await gqlFetch<{ servicesPerformanceBetweenTimes: unknown }>(
+  const data = await gqlFetch<{
+    cur: unknown;
+    prev: unknown;
+    summary: SummaryRaw[];
+    names: { nodes: Array<{ id: string; name: string | null }> };
+  }>(
     NETWORK,
     SERVICES_PERFORMANCE,
     { endCurrent: w.endISO, mid: w.startISO, startPrev: w.prevStartISO },
     { revalidate: rangeTTL(range) },
   );
-  const raw = parseScalar<PerfRaw[]>(data.servicesPerformanceBetweenTimes);
+  const cur = unwrapRange<UsageRaw[]>(parseScalar(data.cur), false).data ?? [];
+  assertUsageNotCut(cur.map((r) => r.service_id));
+  const prevCU = new Map(
+    (unwrapRange<UsageRaw[]>(parseScalar(data.prev), false).data ?? []).map((r) => [r.service_id, num(r.estimated_compute_units)]),
+  );
+  const staked = new Map((data.summary ?? []).map((s) => [s.serviceId, s]));
+  const names = new Map((data.names?.nodes ?? []).map((s) => [s.id, s.name ?? '']));
 
-  const rows: ServicePerf[] = raw.map((r) => ({
-    serviceId: r.service_id,
-    serviceName: r.service_name,
-    change: num(r.change),
-    sharePct: 0,
-    computedUnits: num(r.computed_units),
-    estimatedComputedUnits: num(r.estimated_computed_units),
-    relays: num(r.relays),
-    estimatedRelays: num(r.estimated_relays),
-    claimedUpokt: num(r.claimed_upokt),
-    appsStaked: num(r.apps_staked),
-    suppliersStaked: num(r.suppliers_staked),
-  }));
+  const rows: ServicePerf[] = cur.map((r) => {
+    const previous = prevCU.get(r.service_id);
+    const now = num(r.estimated_compute_units);
+    return {
+      serviceId: r.service_id,
+      serviceName: names.get(r.service_id) ?? '',
+      change: previous ? (now - previous) / previous : 1,
+      sharePct: 0,
+      computedUnits: num(r.compute_units),
+      estimatedComputedUnits: now,
+      relays: num(r.relays),
+      estimatedRelays: num(r.estimated_relays),
+      claimedUpokt: num(r.settled_upokt),
+      appsStaked: num(staked.get(r.service_id)?.stakedApplications),
+      suppliersStaked: num(staked.get(r.service_id)?.stakedSuppliers),
+    };
+  });
 
   const totalCU = rows.reduce((s, r) => s + r.estimatedComputedUnits, 0) || 1;
   for (const r of rows) r.sharePct = (r.estimatedComputedUnits / totalCU) * 100;

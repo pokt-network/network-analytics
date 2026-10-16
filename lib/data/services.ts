@@ -3,9 +3,10 @@ import { toDate } from '@/lib/time';
 import { UPOKT_PER_POKT } from '@/lib/config';
 import { NETWORK, type RangeKey } from '@/lib/app-config';
 import { rangeWindow, rangeTTL } from '@/lib/timeranges';
-import { SERVICES_FIRST_PAGE, SERVICES_LIST, RELAYS_BY_SERVICE_PER_POINT } from '@/lib/queries/analytics';
+import { SERVICES_FIRST_PAGE, SERVICES_LIST, SERVICE_USAGE_ONE } from '@/lib/queries/analytics';
 import { getServicesPerformance } from './traffic';
 import { num, parseScalar } from './_util';
+import { unwrapRange } from './coverage';
 
 export interface ServiceListItem {
   id: string;
@@ -61,11 +62,10 @@ async function walkServices(): Promise<{ nodes: ServiceListItem[]; short: string
 }
 
 interface RelayPointRaw {
-  date_truncated: string;
-  service_id: string;
+  bucket_start: string;
   estimated_relays: number | string;
-  estimated_computed_units: number | string;
-  claimed_upokt: number | string;
+  estimated_compute_units: number | string;
+  settled_upokt: number | string;
 }
 
 export interface ServiceVolumePoint {
@@ -82,20 +82,20 @@ export interface ServiceDetail {
 
 async function getServiceVolume(serviceId: string, range: RangeKey, now?: number): Promise<{ series: ServiceVolumePoint[]; grossRewardsPokt: number }> {
   const w = rangeWindow(range, now);
-  const data = await gqlFetch<{ getRelaysByServicePerPointJson: unknown }>(
+  const data = await gqlFetch<{ getServiceUsageJson: unknown }>(
     NETWORK,
-    RELAYS_BY_SERVICE_PER_POINT,
-    { start: w.startISO, end: w.endISO, interval: w.interval },
+    SERVICE_USAGE_ONE,
+    { service: serviceId, start: w.startISO, end: w.endISO, interval: w.interval },
     { revalidate: rangeTTL(range) },
   );
-  const raw = parseScalar<RelayPointRaw[]>(data.getRelaysByServicePerPointJson).filter((p) => p.service_id === serviceId);
+  const raw = unwrapRange<RelayPointRaw[]>(parseScalar(data.getServiceUsageJson), false).data ?? [];
   let grossUpokt = 0;
   const series = raw
     .map((p) => {
-      grossUpokt += num(p.claimed_upokt);
+      grossUpokt += num(p.settled_upokt);
       return {
-        date: toDate(p.date_truncated)?.toISOString() ?? p.date_truncated,
-        estimatedCU: num(p.estimated_computed_units),
+        date: toDate(p.bucket_start)?.toISOString() ?? p.bucket_start,
+        estimatedCU: num(p.estimated_compute_units),
         estimatedRelays: num(p.estimated_relays),
       };
     })
