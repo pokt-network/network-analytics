@@ -124,9 +124,13 @@ export function DataTable<T>({
   const [debouncedQuery, setDebouncedQuery] = useState(query);
   useEffect(() => {
     if (!server) return;
-    const t = setTimeout(() => setDebouncedQuery(query), 300);
+    const t = setTimeout(() => {
+      // the page returns to 1 with the search that commits, not before: the old search would be read for page 1
+      if (query !== debouncedQuery) setPage(1);
+      setDebouncedQuery(query);
+    }, 300);
     return () => clearTimeout(t);
-  }, [query, server]);
+  }, [query, server, debouncedQuery]);
   const onState = useRef(server?.onState);
   useEffect(() => {
     onState.current = server?.onState;
@@ -154,7 +158,7 @@ export function DataTable<T>({
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
-              setPage(1);
+              if (!server) setPage(1);
             }}
             placeholder={searchPlaceholder}
             className="h-9 min-w-[200px] rounded-lg border bg-bg-surface px-3 text-[13px] text-text-primary outline-none focus:border-blue"
