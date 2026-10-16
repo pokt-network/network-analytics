@@ -146,13 +146,16 @@ export function TrafficTab({ range, onOpenService }: { range: RangeKey; onOpenSe
       header: 'Change',
       align: 'right',
       hideOnMobile: true,
-      sortValue: (r) => r.change,
-      render: (r) => (
-        <span className={r.change > 0.05 ? 'text-mint' : r.change < -0.05 ? 'text-coral' : ''}>
-          {r.change >= 0 ? '+' : ''}
-          {r.change.toFixed(1)}%
-        </span>
-      ),
+      sortValue: (r) => r.change ?? -Infinity,
+      render: (r) =>
+        r.change == null ? (
+          '—'
+        ) : (
+          <span className={r.change > 0.05 ? 'text-mint' : r.change < -0.05 ? 'text-coral' : ''}>
+            {r.change >= 0 ? '+' : ''}
+            {r.change.toFixed(1)}%
+          </span>
+        ),
     },
     {
       key: 'cu',

@@ -67,7 +67,7 @@ test('traffic overview: network total from the indexer, top series, first page a
   const [eth, base] = result.page.rows;
   assert.equal(eth.sharePct, 50, 'share of the network total');
   assert.equal(eth.change, 1, '(500 - 250) / 250');
-  assert.equal(base.change, 1, 'no previous activity: 1, as the old resolver');
+  assert.equal(base.change, null, 'previous window not covered by the money tables: null, shown as a dash');
   assert.equal(eth.serviceName, 'Ethereum');
   assert.equal(base.serviceName, '');
   assert.deepEqual([eth.suppliersStaked, eth.appsStaked, eth.claimedUpokt], [7, 3, 5]);

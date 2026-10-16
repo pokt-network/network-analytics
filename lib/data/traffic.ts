@@ -39,7 +39,8 @@ export interface ServicePerf {
   serviceId: string;
   serviceName: string;
   /** Current vs the equal-length previous period's estimated CU, 1 when the previous period has none (old resolver rule). */
-  change: number;
+  /** null when the money tables do not cover the whole previous window (C1 returns no previous). */
+  change: number | null;
   /** share of the network total's estimated CU this window (%). */
   sharePct: number;
   computedUnits: number;
@@ -76,11 +77,11 @@ const networkCU = (total: RelayPointRaw[]) => total.reduce((s, p) => s + num(p.e
 
 function toPerf(r: UsageRaw, totalCU: number): ServicePerf {
   const cu = num(r.estimated_compute_units);
-  const previous = num(r.previous_estimated_compute_units);
+  const previous = r.previous_estimated_compute_units == null ? null : num(r.previous_estimated_compute_units);
   return {
     serviceId: r.service_id,
     serviceName: r.name ?? '',
-    change: previous ? (cu - previous) / previous : 1,
+    change: previous == null ? null : previous ? (cu - previous) / previous : 1,
     sharePct: (cu / (totalCU || 1)) * 100,
     computedUnits: num(r.compute_units),
     estimatedComputedUnits: cu,
