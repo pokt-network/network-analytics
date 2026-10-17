@@ -23,7 +23,7 @@ export function ClaimProofTab() {
   const { addresses, range } = useStakingTool();
   const d = useTabData<ClaimProofs>(
     addresses.length ? `/api/operator/claim-proof?addresses=${addresses.join(',')}&range=${range}` : '',
-    { prefetchSiblings: false },
+    { prefetchSiblings: false, settled: true },
   );
   const coverageNote = d.error ? null : rangeNote(d.data?.range ?? null, range === '24h' ? 'hour' : 'day');
 

@@ -1,19 +1,67 @@
 // Analytics resolver query strings. These `get*` resolvers return JSON/String scalars (some
 // double-encoded) — hand-authored payload types live in lib/data/*. Shapes verified live 2026-07-03.
 
-export const RELAYS_BY_SERVICE_PER_POINT = /* GraphQL */ `
-  query relaysByServicePerPoint($start: Datetime, $end: Datetime, $interval: String) {
-    getRelaysByServicePerPointJson(startTimestamp: $start, endTimestamp: $end, truncInterval: $interval)
+// get_service_usage's table arguments (pocketdex release C1): every service with usage in the window, searched by
+// $searchText (id or name), ordered by $orderBy / $orderDir, $pageSize rows from $offset, each with its estimated compute units
+// in the previous window from $compareStart (the Change column). total_services on each row counts the matching services.
+const PAGE_ARGS = 'rowLimit: $pageSize, rowOffset: $offset, orderBy: $orderBy, orderDir: $orderDir, searchText: $searchText, compareStart: $compareStart, withDetails: true';
+const PAGE_VARS = '$pageSize: Int!, $offset: Int!, $orderBy: String!, $orderDir: String!, $searchText: String, $compareStart: Datetime';
+
+// One page of a services table with the network total (every service, summed by the indexer) its shares divide by.
+export const SERVICES_USAGE_PAGE = /* GraphQL */ `
+  query servicesUsagePage($start: Datetime!, $end: Datetime!, ${PAGE_VARS}) {
+    total: getServiceUsageJson(services: null, byService: false, rangeStart: $start, rangeEnd: $end)
+    page: getServiceUsageJson(services: null, ${PAGE_ARGS}, rangeStart: $start, rangeEnd: $end)
   }
 `;
 
-export const SERVICES_PERFORMANCE = /* GraphQL */ `
-  query servicesPerformance($endCurrent: Datetime, $mid: Datetime, $startPrev: Datetime) {
-    servicesPerformanceBetweenTimes(
-      endCurrent: $endCurrent
-      startCurrentAndEndPrevious: $mid
-      startPrevious: $startPrev
+// The Traffic tab's first view in one request: the network total per bucket, the top services' series (by estimated
+// compute units, as the chart always ranked them) and the first page of the Service Performance table.
+export const TRAFFIC_OVERVIEW = /* GraphQL */ `
+  query trafficOverview($start: Datetime!, $end: Datetime!, $interval: String, $seriesTop: Int!, ${PAGE_VARS}) {
+    total: getServiceUsageJson(services: null, byService: false, rangeStart: $start, rangeEnd: $end, bucket: $interval)
+    series: getServiceUsageJson(
+      services: null
+      rowLimit: $seriesTop
+      rowOffset: 0
+      orderBy: "estimated_compute_units"
+      orderDir: "desc"
+      rangeStart: $start
+      rangeEnd: $end
+      bucket: $interval
     )
+    page: getServiceUsageJson(services: null, ${PAGE_ARGS}, rangeStart: $start, rangeEnd: $end)
+  }
+`;
+
+// The services the user picked for the chart (at most 20), per bucket.
+export const TRAFFIC_SERIES = /* GraphQL */ `
+  query trafficSeries($services: [String!]!, $start: Datetime!, $end: Datetime!, $interval: String) {
+    getServiceUsageJson(services: $services, rangeStart: $start, rangeEnd: $end, bucket: $interval)
+  }
+`;
+
+// One service's detail: its row (name, staked counts, totals), the network total for its share, and its series.
+export const SERVICE_DETAIL = /* GraphQL */ `
+  query serviceDetail($service: String!, $start: Datetime!, $end: Datetime!, $interval: String) {
+    row: getServiceUsageJson(services: [$service], withDetails: true, rangeStart: $start, rangeEnd: $end)
+    total: getServiceUsageJson(services: null, byService: false, rangeStart: $start, rangeEnd: $end)
+    series: getServiceUsageJson(services: [$service], rangeStart: $start, rangeEnd: $end, bucket: $interval)
+  }
+`;
+
+// The network total over a window, or per bucket: the 24h stat cards (per hour) and the Suppliers tab (its
+// staked_suppliers, summed over the services with usage in the window).
+export const NETWORK_USAGE = /* GraphQL */ `
+  query networkUsage($start: Datetime!, $end: Datetime!, $interval: String) {
+    getServiceUsageJson(services: null, byService: false, rangeStart: $start, rangeEnd: $end, bucket: $interval)
+  }
+`;
+
+// The same total with the staked counts (withDetails reads the live service configs): Σ staked_suppliers for the Suppliers tab.
+export const NETWORK_USAGE_STAKED = /* GraphQL */ `
+  query networkUsageStaked($start: Datetime!, $end: Datetime!, $interval: String) {
+    getServiceUsageJson(services: null, byService: false, withDetails: true, rangeStart: $start, rangeEnd: $end, bucket: $interval)
   }
 `;
 
@@ -43,32 +91,17 @@ export const CLAIM_PROOFS_BY_TIME = /* GraphQL */ `
   }
 `;
 
-// Distinct supplier domains (derived from serviceConfig endpoint hosts) + reward sums for ranking.
-export const DOMAINS_DISTINCT = /* GraphQL */ `
-  query domainsDistinct {
-    domainServiceDailyRewards {
-      groupedAggregates(groupBy: [DOMAIN]) {
-        keys
-        sum {
-          grossRewards
-        }
-      }
+// Supplier domains (derived from serviceConfig endpoint hosts) ranked by lifetime claimed rewards, with the Staked
+// suppliers that have a live config on each and their stake, in one call.
+export const SUPPLIER_DOMAINS = /* GraphQL */ `
+  query supplierDomains($top: Int) {
+    getSupplierDomainsList(top: $top) {
+      domain
+      stakedSuppliers
+      stakedUpokt
     }
   }
 `;
-
-// Aggregate supplier count + staked tokens across the passed domains. The resolver sums every domain it
-// is given into one result, so per-domain rows need one call per domain: they go as aliases d0, d1, …
-// of a single request.
-export function supplierStatsByDomainsQuery(count: number): string {
-  const vars = Array.from({ length: count }, (_, i) => `$d${i}: [String]`).join(', ');
-  const fields = Array.from({ length: count }, (_, i) => `d${i}: getSupplierStatsByDomains(pDomains: $d${i})`).join('\n    ');
-  return /* GraphQL */ `
-  query supplierStatsByDomains(${vars}) {
-    ${fields}
-  }
-`;
-}
 
 export const TOTAL_SUPPLY_BY_DAY = /* GraphQL */ `
   query totalSupplyByDay($start: Datetime, $end: Datetime) {
@@ -95,10 +128,33 @@ export const TOKENOMICS_PARAM = /* GraphQL */ `
 `;
 
 // Services list (id + label) for the Services picker. The indexer returns up to 1000 rows per page; a longer
-// list is walked with `after` = the previous page's endCursor.
+// list is walked with `after` = the previous page's endCursor. The first page comes with the last processed height
+// (SERVICES_FIRST_PAGE), and every later page is read at that $blockHeight. The first page's rows and the height come
+// in one request but not one snapshot (each field is its own READ COMMITTED statement), so they can be a block apart;
+// the walk's count check (rows == totalCount, retried once) catches one that does not add up.
+export const SERVICES_FIRST_PAGE = /* GraphQL */ `
+  query servicesFirstPage {
+    _metadata {
+      lastProcessedHeight
+    }
+    services(first: 1000, orderBy: ID_ASC) {
+      totalCount
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        id
+        name
+      }
+    }
+  }
+`;
+
 export const SERVICES_LIST = /* GraphQL */ `
-  query servicesList($after: Cursor) {
-    services(first: 1000, orderBy: ID_ASC, after: $after) {
+  query servicesList($after: Cursor, $blockHeight: String!) {
+    services(first: 1000, orderBy: ID_ASC, after: $after, blockHeight: $blockHeight) {
+      totalCount
       pageInfo {
         hasNextPage
         endCursor
@@ -138,75 +194,132 @@ export const REWARDS_BY_DATE_GROUPED = /* GraphQL */ `
   }
 `;
 
-// eventClaimSettleds: 23.2M+ rows — ALWAYS filter (by owner) + paginate. transactionId can be null.
-// Filter THROUGH the supplier relation (`supplier.ownerId`), NOT the denormalized `supplierOwnerId`
-// scalar: that column is populated on only ~25% of rows, so filtering on it silently under-reports a
-// fleet's settlements (verified live: relation 5,575,366 vs supplierOwnerId 4,640,974 for one owner).
-// ID_DESC orders the rows of one block, so the order is total. A walk over many pages (the CSV export)
-// passes `after` = the previous page's endCursor, a keyset on (block, id): a settlement indexed meanwhile
-// cannot shift the rows as it does with OFFSET (which then repeats and drops rows across pages). totalCount
-// counts every settlement of the owners (seconds for a large owner), so it is only fetched when asked for.
-// supplierId is the operator (node) address — the useful per-row identity across a fleet.
-export const EVENT_CLAIM_SETTLEDS = /* GraphQL */ `
-  query eventClaimSettleds($owners: [String!], $first: Int, $offset: Int, $after: Cursor, $withCount: Boolean!) {
-    eventClaimSettleds(filter: { supplier: { ownerId: { in: $owners } } }, orderBy: [BLOCK_ID_DESC, ID_DESC], first: $first, offset: $offset, after: $after) {
-      totalCount @include(if: $withCount)
-      pageInfo {
-        endCursor
-        hasNextPage
-      }
-      nodes {
-        serviceId
-        numRelays
-        claimedAmount
-        settledAmount
-        mintedAmount
-        mintRatio
-        transactionId
-        blockId
-        supplierId
-        supplierOwnerId
-        supplier {
-          ownerId
-        }
-      }
+// Settled claims of the suppliers the owners own now, newest first (by height, then event_idx), over the whole
+// history, from the settlement catalog. At most $rowLimit rows (up to 1000); the next page passes the last row's height
+// and event_idx as $beforeHeight / $beforeEventIdx, a keyset: a settlement indexed meanwhile cannot shift the rows as it
+// does with OFFSET. supplier_id is the operator (node) address — the useful per-row identity across a fleet;
+// supplier_owner_id is the owner the settlement recorded, current_owner_id the supplier's owner now.
+// The pager's page: {range, data}, which carries the covered part of the history (the settlement tables can lag the
+// indexed blocks) even when it has no rows, so a page is always one request. Snake-case keys, numbers as strings.
+export const OWNER_CLAIMS_PAGE = /* GraphQL */ `
+  query ownerClaimsPage($owners: [String], $rowLimit: Int, $beforeHeight: BigInt, $beforeEventIdx: Int) {
+    getClaimsJson(
+      suppliers: null
+      rangeStart: null
+      rangeEnd: null
+      owners: $owners
+      statuses: ["settled"]
+      rowLimit: $rowLimit
+      beforeHeight: $beforeHeight
+      beforeEventIdx: $beforeEventIdx
+    )
+  }
+`;
+
+// The export's page: the same rows as a list with only the fields the CSV writes (about half the bytes of the JSON
+// twin); the export needs no range.
+export const OWNER_CLAIMS = /* GraphQL */ `
+  query ownerClaims($owners: [String], $rowLimit: Int, $beforeHeight: BigInt, $beforeEventIdx: Int) {
+    getClaimsList(
+      suppliers: null
+      rangeStart: null
+      rangeEnd: null
+      owners: $owners
+      statuses: ["settled"]
+      rowLimit: $rowLimit
+      beforeHeight: $beforeHeight
+      beforeEventIdx: $beforeEventIdx
+    ) {
+      height
+      eventIdx
+      serviceId
+      relays
+      settledUpokt
+      relayMintedUpokt
+      supplierId
+      supplierOwnerId
+      currentOwnerId
     }
   }
 `;
 
 // ── Operator / Owner suppliers + stake-filter queries (staking tools) ──
-export const SUPPLIER_OWNER_SUMMARY = /* GraphQL */ `
-  query supplierOwnerSummary($owners: [String!]) {
-    suppliers(filter: { ownerId: { in: $owners } }) {
-      totalCount
-      aggregates {
-        sum {
-          stakeAmount
-        }
-      }
+// One row for the whole fleet now: how many suppliers and their combined stake. Pass owners (the suppliers they own
+// now) or operators (the Staked suppliers whose service configs share revenue with them now), not both.
+export const SUPPLIER_FLEET_SUMMARY = /* GraphQL */ `
+  query supplierFleetSummary($owners: [String], $operators: [String]) {
+    getSupplierFleetList(owners: $owners, operators: $operators, bySupplier: false) {
+      supplierCount
+      stakeUpokt
+    }
+  }
+`;
+
+// One page of the owners' suppliers now (any status; $stakeStatuses keeps some; $maxStakeUpokt keeps the stakes below it,
+// for "below min stake"), largest stake first, then by id, and their count, in one request (not one snapshot: each field
+// is its own READ COMMITTED statement), all from the fleet function. The page is the function's own keyset ($rowLimit
+// rows after $afterStakeUpokt / $afterSupplierId), which counts services for that page only. The count is the fleet's
+// own supplierCount under the same arguments. serviceCount is the number of services the supplier has a live config for.
+export const OWNER_SUPPLIERS = /* GraphQL */ `
+  query ownerSuppliers(
+    $owners: [String]
+    $stakeStatuses: [String]
+    $maxStakeUpokt: BigFloat
+    $rowLimit: Int
+    $afterStakeUpokt: BigFloat
+    $afterSupplierId: String
+  ) {
+    rows: getSupplierFleetList(
+      owners: $owners
+      stakeStatuses: $stakeStatuses
+      maxStakeUpokt: $maxStakeUpokt
+      rowLimit: $rowLimit
+      afterStakeUpokt: $afterStakeUpokt
+      afterSupplierId: $afterSupplierId
+    ) {
+      supplierId
+      ownerId
+      stakeUpokt
+      stakeStatus
+      serviceCount
+    }
+    count: getSupplierFleetList(owners: $owners, stakeStatuses: $stakeStatuses, maxStakeUpokt: $maxStakeUpokt, bySupplier: false) {
+      supplierCount
+    }
+  }
+`;
+
+// One page of the operators' suppliers now, largest stake first (then by id), and their count, in one request (not one
+// snapshot). The page is the fleet function's own keyset: $rowLimit rows after the previous page's last stake and id
+// ($afterStakeUpokt / $afterSupplierId), with services counted for that page only. The other rows do not shift as they
+// do with OFFSET, but a supplier whose stake crosses the page boundary between two reads (a slash, a top-up) can be shown
+// twice or missed; the tabs flag both (useCursorPages). serviceCount is the number of services the supplier has a live
+// config for.
+export const OPERATOR_SUPPLIERS = /* GraphQL */ `
+  query operatorSuppliers($operators: [String], $rowLimit: Int, $afterStakeUpokt: BigFloat, $afterSupplierId: String) {
+    rows: getSupplierFleetList(
+      operators: $operators
+      rowLimit: $rowLimit
+      afterStakeUpokt: $afterStakeUpokt
+      afterSupplierId: $afterSupplierId
+    ) {
+      supplierId
+      ownerId
+      stakeUpokt
+      stakeStatus
+      serviceCount
+    }
+    fleet: getSupplierFleetList(operators: $operators, bySupplier: false) {
+      supplierCount
     }
   }
 `;
 
 // ── Operator Staking (addresses are rev-share recipients, not owners) ──
 // The Operator tool's addresses are the rev-share / node-runner addresses that appear in a supplier's
-// serviceConfig.revShare. The fleet rollup + slashes are therefore scoped by a SupplierFilter built
-// in lib/data/operator.ts (an OR of per-address `serviceConfigs.some.revShare.contains`), passed as a
-// typed variable rather than string-built. The rewards-by-service and overserviced resolvers take the
-// rev-share addresses directly; the claim/proof ones take them as the catalog's `operators`.
-
-export const OPERATOR_SUPPLIER_SUMMARY = /* GraphQL */ `
-  query operatorSupplierSummary($filter: SupplierFilter!) {
-    suppliers(filter: $filter) {
-      totalCount
-      aggregates {
-        sum {
-          stakeAmount
-        }
-      }
-    }
-  }
-`;
+// serviceConfig.revShare. The fleet rollup, the supplier list, the claim/proof series and the slashes take them as the
+// catalog's `operators` (the Staked suppliers whose live service configs share revenue with them). The
+// rewards-by-service and overserviced resolvers take the rev-share addresses directly.
 
 // Settled and expired/discarded claims per bucket of the suppliers that share revenue with the operators now, from the
 // settlement catalog (one aggregate series each).
@@ -234,26 +347,6 @@ export const OVERSERVICED_BY_ADDRESSES = /* GraphQL */ `
   }
 `;
 
-// Suppliers matching an arbitrary SupplierFilter (rev-share for the Operator tool, ownerId + stake
-// status for the Owner tool), ranked by stake. serviceConfigs.totalCount is the number of services
-// the supplier is configured for.
-export const SUPPLIERS_LIST = /* GraphQL */ `
-  query suppliersList($filter: SupplierFilter!, $first: Int, $offset: Int) {
-    suppliers(filter: $filter, orderBy: STAKE_AMOUNT_DESC, first: $first, offset: $offset) {
-      totalCount
-      nodes {
-        id
-        ownerId
-        stakeAmount
-        stakeStatus
-        serviceConfigs {
-          totalCount
-        }
-      }
-    }
-  }
-`;
-
 // Current supplier minimum stake (governance param, upsert-latest). Value is JSON {denom, amount}.
 // Available on the indexer `params` resolver — no LCD needed for this one.
 export const SUPPLIER_MIN_STAKE = /* GraphQL */ `
@@ -266,40 +359,106 @@ export const SUPPLIER_MIN_STAKE = /* GraphQL */ `
   }
 `;
 
-// Supplier slashing events scoped to the operator's suppliers (filter built from the rev-share
-// addresses) and to a range (blockId from FIRST_BLOCK_SINCE). proofValidationStatus can be null; sessionId can be empty.
+// Slashing events of the operators' suppliers in [start, end), newest first (by height, then id). At most $rowLimit
+// rows; the next page passes the last row's height and id as $beforeHeight / $beforeId.
+// The pager's page: {range, data}, which carries the part of the window the indexed blocks cover even when it has no
+// rows, so a page is always one request. Snake-case keys, numbers as strings; stake_upokt is the stake after the slash,
+// proof_validation_status can be null.
+export const SUPPLIER_SLASH_PAGE = /* GraphQL */ `
+  query supplierSlashPage(
+    $operators: [String]
+    $operatorScope: String
+    $start: Datetime
+    $end: Datetime
+    $rowLimit: Int
+    $beforeHeight: BigInt
+    $beforeId: String
+  ) {
+    getActorLifecycleJson(
+      kind: "supplier"
+      addresses: null
+      rangeStart: $start
+      rangeEnd: $end
+      operators: $operators
+      operatorScope: $operatorScope
+      events: ["slash"]
+      rowLimit: $rowLimit
+      beforeHeight: $beforeHeight
+      beforeId: $beforeId
+    )
+  }
+`;
+
+// The export's page: the same rows as a list with only the fields the CSV writes (and blockTime, for counting the
+// stretches the settlement tables do not cover); the export needs no range.
 export const SUPPLIER_SLASHES = /* GraphQL */ `
-  query supplierSlashes($filter: EventSupplierSlashedFilter!, $first: Int, $offset: Int) {
-    eventSupplierSlasheds(filter: $filter, orderBy: BLOCK_ID_DESC, first: $first, offset: $offset) {
-      totalCount
-      aggregates {
-        sum {
-          proofMissingPenalty
-        }
-      }
-      nodes {
-        supplierId
-        blockId
-        proofMissingPenalty
-        previousStakeAmount
-        afterStakeAmount
-        proofValidationStatus
-        serviceId
-        applicationId
-      }
+  query supplierSlashes(
+    $operators: [String]
+    $operatorScope: String
+    $start: Datetime
+    $end: Datetime
+    $rowLimit: Int
+    $beforeHeight: BigInt
+    $beforeId: String
+  ) {
+    getActorLifecycleList(
+      kind: "supplier"
+      addresses: null
+      rangeStart: $start
+      rangeEnd: $end
+      operators: $operators
+      operatorScope: $operatorScope
+      events: ["slash"]
+      rowLimit: $rowLimit
+      beforeHeight: $beforeHeight
+      beforeId: $beforeId
+    ) {
+      height
+      id
+      blockTime
+      actorId
+      penaltyUpokt
+      previousStakeUpokt
+      stakeUpokt
+      proofValidationStatus
+      serviceId
+      applicationId
     }
   }
 `;
 
-// The first block at or after a timestamp: a range's start as a height, so a list can filter on its blockId index.
-// Ordered by timestamp so it reads the (timestamp, id) index: ordered by id it walked every block before the range
-// (24h on mainnet: 0.98 s against 0.05 ms, 2026-10-11).
-export const FIRST_BLOCK_SINCE = /* GraphQL */ `
-  query firstBlockSince($since: Datetime!) {
-    blocks(filter: { timestamp: { greaterThanOrEqualTo: $since } }, orderBy: TIMESTAMP_ASC, first: 1) {
-      nodes {
-        id
-      }
-    }
+// The range's slashing totals in one request: getSupplierPenaltiesJson (the settlement tables; rows of kind 'slashed',
+// one per reason, with events and slashed_upokt) for the part they cover, and the slashing events of the window's last
+// hour ($tailStart..$end) with the part of it the indexed blocks cover, which the caller counts past the settlement
+// tables' covered_to (they trail the indexed blocks).
+export const SUPPLIER_SLASH_TOTALS = /* GraphQL */ `
+  query supplierSlashTotals($operators: [String], $operatorScope: String, $start: Datetime!, $end: Datetime!, $tailStart: Datetime) {
+    getSupplierPenaltiesJson(
+      suppliers: null
+      rangeStart: $start
+      rangeEnd: $end
+      bySupplier: false
+      operators: $operators
+      operatorScope: $operatorScope
+    )
+    tail: getActorLifecycleJson(
+      kind: "supplier"
+      addresses: null
+      rangeStart: $tailStart
+      rangeEnd: $end
+      operators: $operators
+      operatorScope: $operatorScope
+      events: ["slash"]
+      rowLimit: 1000
+    )
+  }
+`;
+
+// The last settlement the money tables hold, and the last block the indexer finished: a settlement above it is in a
+// block still being written (lib/data/settlement.ts).
+export const LAST_SETTLEMENT = /* GraphQL */ `
+  query lastSettlement {
+    getLastSettlement { height blockTime }
+    _metadata { lastProcessedHeight }
   }
 `;

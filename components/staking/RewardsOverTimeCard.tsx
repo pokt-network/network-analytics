@@ -73,7 +73,7 @@ export function RewardsOverTimeCard({
   const addrParam = addresses.join(',');
   const rewards = useTabData<OwnerResponse>(
     addresses.length ? `/api/owner?addresses=${addrParam}&range=${range}&group=${groupAll ? 1 : 0}` : '',
-    { prefetchSiblings },
+    { prefetchSiblings, settled: true },
   );
 
   const series: SeriesDef[] = groupAll

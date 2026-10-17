@@ -5,51 +5,59 @@ import { IconReceipt, IconDownload } from '@tabler/icons-react';
 import { EXPLORER_BASE_URL } from '@/lib/app-config';
 import { UPOKT_PER_POKT } from '@/lib/config';
 import { useStakingTool } from '@/components/staking/StakingToolContext';
-import { useTabData } from '@/lib/use-tab-data';
+import { useCursorPages, walkPages } from '@/lib/cursor-pages';
 import type { SlashPage, SlashRow } from '@/lib/data/operator';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { ChartSkeleton, EmptyState } from '@/components/ui/states';
+import { rangeNote } from '@/lib/data/coverage';
 import { formatNumber, formatPokt, truncate } from '@/lib/format';
 import { toCsv, downloadCsv, csvFilename } from '@/lib/csv';
 
 const PAGE_SIZE = 25;
 const EXPORT_CAP = 5000;
-const EXPORT_CHUNK = 100;
+const EXPORT_CHUNK = 1000; // the route's largest export page (lookahead=0: no extra row, stops at a short page)
+const EXPORT_MAX_CALLS = Math.ceil(EXPORT_CAP / EXPORT_CHUNK) + 1;
 
-// Supplier slashing events (proof-missing penalties) for the operator's suppliers, in the view's range.
+// Supplier slashing events (proof-missing penalties) for the operator's suppliers, in the view's range. Paged by keyset
+// on the server (useCursorPages); the range's count and penalty sum come with every page, computed once per range.
 export function SlashingTab() {
   const { addresses, range } = useStakingTool();
-  const [page, setPage] = useState(1);
   const [exporting, setExporting] = useState(false);
+  const [exportNote, setExportNote] = useState<string | null>(null);
 
   const addrParam = addresses.join(',');
   const query = `addresses=${addrParam}&range=${range}`;
   const [prevQuery, setPrevQuery] = useState(query);
   if (prevQuery !== query) {
     setPrevQuery(query);
-    setPage(1);
+    setExportNote(null);
   }
 
-  const d = useTabData<SlashPage>(addresses.length ? `/api/operator/slashing?${query}&page=${page}` : '');
+  // every range is a heavy read on the indexer: no sibling-range prefetch
+  const d = useCursorPages<SlashPage>(addresses.length ? `/api/operator/slashing?${query}` : '', query, { prefetchSiblings: false });
+  const { page } = d;
   const totalCount = d.data?.totalCount ?? 0;
-  const pages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  // the count is a floor when part of the range could only be counted up to a cap
+  const atLeast = d.data?.capped ? 'at least ' : '';
+  const pages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE), page + (d.canNext ? 1 : 0));
+  const noRows = page === 1 && (d.data?.rows.length ?? 0) === 0;
+  // what the indexed blocks cover of the range: a short coverage is said, never shown as a plain 0
+  const coverageNote = d.error ? null : rangeNote(d.data?.range ?? null, range === '24h' ? 'hour' : 'day');
 
   async function exportCsv() {
     if (exporting || addresses.length === 0) return;
     setExporting(true);
+    setExportNote(null);
     try {
-      const all: SlashRow[] = [];
-      let p = 1;
-      let total = Infinity;
-      while (all.length < total && all.length < EXPORT_CAP) {
-        const res = await fetch(`/api/operator/slashing?${query}&page=${p}&pageSize=${EXPORT_CHUNK}`);
-        if (!res.ok) break;
-        const data: SlashPage = await res.json();
-        total = data.totalCount ?? 0;
-        all.push(...data.rows);
-        if (data.rows.length === 0) break;
-        p++;
-      }
+      const { rows: all, complete } = await walkPages<SlashRow>(
+        // the server pins the window with the first page; walkPages sends it back with every later page and the probe
+        (after, size) => `/api/operator/slashing?${query}&lookahead=0&pageSize=${size}${after ? `&after=${encodeURIComponent(after)}` : ''}`,
+        EXPORT_CHUNK,
+        EXPORT_CAP,
+        EXPORT_MAX_CALLS,
+        // at the cap on a full page, 1 row past the last cursor tells whether the export is complete
+        true,
+      );
       const rows = all.slice(0, EXPORT_CAP);
       const headers = ['Supplier', 'Block', 'Penalty (POKT)', 'Prev Stake (POKT)', 'After Stake (POKT)', 'Proof Status', 'Service', 'Application'];
       const body = rows.map((r) => [
@@ -63,6 +71,13 @@ export function SlashingTab() {
         r.applicationId ?? '',
       ]);
       downloadCsv(csvFilename('operator-slashing'), toCsv(headers, body));
+      setExportNote(
+        complete
+          ? `Exported all ${formatNumber(rows.length)} slashing events.`
+          : `Exported the ${formatNumber(rows.length)} most recent slashing events — the export is capped for performance.`,
+      );
+    } catch {
+      setExportNote('Export failed — please try again.');
     } finally {
       setExporting(false);
     }
@@ -77,21 +92,34 @@ export function SlashingTab() {
           <button
             type="button"
             onClick={exportCsv}
-            disabled={exporting || totalCount === 0}
+            disabled={exporting || noRows}
             aria-label="Download CSV"
-            title={totalCount === 0 ? 'Nothing to download' : 'Download as CSV'}
+            title={noRows ? 'Nothing to download' : 'Download as CSV'}
             className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border bg-bg-card text-text-secondary transition-colors hover:enabled:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
           >
             <IconDownload size={15} className={exporting ? 'animate-pulse' : ''} />
           </button>
         }
       />
-      {!d.data ? (
+      {d.error ? (
+        <>
+          <EmptyState>{d.error}</EmptyState>
+          {/* a failed page keeps the way back */}
+          <div className="mt-3.5 flex justify-end gap-1.5 text-[13px] text-text-secondary">
+            <button type="button" disabled={page <= 1} onClick={d.prev} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Prev</button>
+            <button type="button" disabled onClick={d.next} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>
+          </div>
+        </>
+      ) : !d.data ? (
         <ChartSkeleton height={200} />
       ) : !d.data.indexed ? (
         <EmptyState>The indexer has not reached the last {range} yet.</EmptyState>
-      ) : totalCount === 0 ? (
-        <EmptyState>No slashing events for these addresses in the last {range}.</EmptyState>
+      ) : noRows ? (
+        <EmptyState>
+          {coverageNote
+            ? `No slashing events for these addresses in the indexed part of the last ${range} (${coverageNote}).`
+            : `No slashing events for these addresses in the last ${range}.`}
+        </EmptyState>
       ) : (
         <>
           <div className="overflow-x-auto">
@@ -129,16 +157,22 @@ export function SlashingTab() {
           </div>
           <div className="mt-3.5 flex items-center justify-between gap-3 text-[13px] text-text-secondary">
             <span>
-              {formatNumber(totalCount)} slashing events in the last {range} · {formatPokt(d.data.penaltyUpokt, 6)} POKT in penalties · page {page} of{' '}
+              {atLeast}{formatNumber(totalCount)} slashing events in the last {range} · {atLeast}{formatPokt(d.data.penaltyUpokt, 6)} POKT in penalties · page {page} of{' '}
               {formatNumber(pages)}
             </span>
             <div className="flex gap-1.5">
-              <button type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Prev</button>
-              <button type="button" disabled={page >= pages} onClick={() => setPage((p) => p + 1)} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>
+              <button type="button" disabled={page <= 1} onClick={d.prev} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Prev</button>
+              <button type="button" disabled={!d.canNext} onClick={d.next} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>
             </div>
           </div>
         </>
       )}
+      {coverageNote && !noRows && d.data?.indexed && <p className="mt-3 text-[12px] text-text-tertiary">{coverageNote}</p>}
+      <p className="mt-3 text-[12px] italic text-text-tertiary">
+        Lists the suppliers that are Staked and share revenue with these addresses now: slashes of suppliers that have since
+        unstaked or stopped sharing revenue with them are not listed yet.
+      </p>
+      {exportNote && <p className="mt-3 text-[12px] text-text-secondary">{exportNote}</p>}
     </Card>
   );
 }

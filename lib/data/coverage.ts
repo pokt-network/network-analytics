@@ -63,6 +63,75 @@ function parse(range: CoverageRange) {
   return { ...t, from, to, gaps };
 }
 
+/** An indexer timestamp as microseconds since the epoch, exactly. The indexer's covered_to is a block's time + 1 µs, and
+ *  a millisecond Date rounds that back onto the block itself, so comparisons against it are made here in µs. Null when
+ *  it is missing or unparseable. */
+export function toMicros(input: string | number | null | undefined): bigint | null {
+  if (input == null || input === '') return null;
+  // epoch numbers (toDate's ms or s): exact to the millisecond
+  if (typeof input === 'number' || /^\d+$/.test(input)) {
+    const d = toDate(input);
+    return d ? BigInt(d.getTime()) * BigInt(1000) : null;
+  }
+  // date and time with `T` or a space, an optional fraction and an optional zone; no zone is UTC, as the indexer writes
+  // it (read here, not by Date, which takes a space-separated form without a zone as local time)
+  const m = input.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:(Z)|([+-])(\d{2})(?::?(\d{2}))?)?$/i);
+  if (!m) {
+    // a fraction the pattern cannot place is not truncated into a wrong instant; other forms (a bare date) as toDate
+    if (/\.\d/.test(input)) return null;
+    const d = toDate(input);
+    return d ? BigInt(d.getTime()) * BigInt(1000) : null;
+  }
+  const [, y, mo, da, h, mi, se, fr, , sign, oh, om] = m;
+  const offsetSeconds = sign ? (sign === '-' ? -1 : 1) * (Number(oh) * 3600 + Number(om ?? 0) * 60) : 0;
+  const seconds = Date.UTC(Number(y), Number(mo) - 1, Number(da), Number(h), Number(mi), Number(se)) / 1000 - offsetSeconds;
+  if (!Number.isFinite(seconds)) return null;
+  return BigInt(seconds) * BigInt(1_000_000) + BigInt((fr ?? '').padEnd(6, '0').slice(0, 6));
+}
+
+/** Microseconds since the epoch as an ISO timestamp that keeps them (`…:16.796001Z`). */
+export function microsToIso(us: bigint): string {
+  const s = us / BigInt(1_000_000);
+  return `${new Date(Number(s) * 1000).toISOString().slice(0, 19)}.${(us % BigInt(1_000_000)).toString().padStart(6, '0')}Z`;
+}
+
+/**
+ * The parts of the requested window the answer does not cover, in microseconds, each once, half-open [from, to): a late
+ * start, the gaps (clipped to the covered span and merged, as parse() does), and the end past covered_to. Empty when the
+ * range is fully covered; for a range with nothing covered use notCovered() first. Microseconds, because covered_to is
+ * the closing block's time + 1 µs: rows are counted against it exactly.
+ */
+export function uncoveredSpansMicros(range: CoverageRange): Array<[bigint, bigint]> {
+  const inc = range.end_inclusive ? BigInt(1) : BigInt(0);
+  const plus = (v: bigint | null) => (v === null ? null : v + inc);
+  const rf = toMicros(range.requested_from);
+  const rt = plus(toMicros(range.requested_to));
+  const cf = toMicros(range.covered_from);
+  const ct = plus(toMicros(range.covered_to));
+  const max = (a: bigint | null, b: bigint | null) => (a === null ? b : b === null ? a : a > b ? a : b);
+  const min = (a: bigint | null, b: bigint | null) => (a === null ? b : b === null ? a : a < b ? a : b);
+  const lo = max(cf, rf);
+  const hi = min(ct, rt);
+  const gaps: Array<[bigint, bigint]> = [];
+  for (const g of range.gaps ?? []) {
+    const a = max(g.from === null ? lo : toMicros(g.from), lo);
+    const b = min(g.to === null ? hi : toMicros(g.to), hi);
+    if (a !== null && b !== null && a < b) gaps.push([a, b]);
+  }
+  gaps.sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
+  const merged: Array<[bigint, bigint]> = [];
+  for (const [a, b] of gaps) {
+    const prev = merged[merged.length - 1];
+    if (prev && a <= prev[1]) prev[1] = b > prev[1] ? b : prev[1];
+    else merged.push([a, b]);
+  }
+  const spans: Array<[bigint, bigint]> = [];
+  if (rf !== null && lo !== null && lo > rf) spans.push([rf, lo]);
+  spans.push(...merged);
+  if (rt !== null && hi !== null && hi < rt) spans.push([hi, rt]);
+  return spans.filter(([a, b]) => a < b);
+}
+
 /** An end short of the window by less than this is the indexer's normal lag behind now, not missing data. */
 const COVERAGE_END_SLACK_MS = 3_600_000;
 const HOUR_PRECISION_MAX_MS = 48 * 3_600_000;

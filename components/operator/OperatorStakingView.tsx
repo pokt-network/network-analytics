@@ -61,7 +61,11 @@ function OperatorBody() {
   const [tab, setTab] = useState('rewards_by_service');
 
   const addrParam = addresses.join(',');
-  const summary = useTabData<OperatorSummary>(addrParam ? `/api/operator/summary?addresses=${addrParam}` : '');
+  const summary = useTabData<OperatorSummary>(addrParam ? `/api/operator/summary?addresses=${addrParam}` : '', {
+    // rewards change at settlements, the fleet counts and stake per block
+    settled: true,
+    alsoByAge: true,
+  });
 
   // Eagerly warm every tab's endpoint in parallel once addresses (and the range) are known. These are
   // heavy indexer aggregations (seconds each on a cold miss); firing them upfront — the same work the
@@ -73,9 +77,10 @@ function OperatorBody() {
     prefetch(`/api/operator/claim-proof?addresses=${addrParam}&range=${range}`);
     prefetch(`/api/operator/rewards-by-service?addresses=${addrParam}&range=${range}`);
     prefetch(`/api/operator/overserviced?addresses=${addrParam}&range=${range}`);
-    prefetch(`/api/operator/slashing?addresses=${addrParam}&range=${range}&page=1`);
+    // the first page's url exactly as the tab requests it (useCursorPages), so the tab reuses this fetch
+    prefetch(`/api/operator/slashing?addresses=${addrParam}&range=${range}`);
     // Page-based tab (range-independent) — warmed once per address set.
-    prefetch(`/api/operator/suppliers?addresses=${addrParam}&page=1`);
+    prefetch(`/api/operator/suppliers?addresses=${addrParam}`);
   }, [addrParam, range]);
 
   return (

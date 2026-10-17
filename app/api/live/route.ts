@@ -1,9 +1,10 @@
-import { unstable_cache } from 'next/cache';
+import { staleCached } from '@/lib/window-cache';
 import { getStatus } from '@/lib/metadata';
 import { INDEXER_LAG_THRESHOLD } from '@/lib/config';
 import { NETWORK } from '@/lib/app-config';
 import { getPoktPrice, type PoktPrice } from '@/lib/price';
 import { getCachedRolling24hStats } from '@/lib/data/rewards';
+import { getLastSettlement } from '@/lib/data/settlement';
 import { getNetInflationPctYr } from '@/lib/data/economy';
 import { diagJson, restamp, stamped } from '@/lib/diagnostics';
 
@@ -25,11 +26,13 @@ export interface LivePayload {
   relays24h: number | null;
   cu24h: number | null;
   netInflation: number | null;
+  /** The last fully written settlement's height: reward panels refetch when it moves (lib/use-tab-data.ts). */
+  settledHeight: number | null;
 }
 
 /** What the 10s `live` entry stores. The rolling-24h numbers are merged in by the handler from the
  *  shared entry so the strip and the Traffic cards read the exact same value (see GET). */
-type LiveBase = Omit<LivePayload, 'relays24h' | 'cu24h'>;
+type LiveBase = Omit<LivePayload, 'relays24h' | 'cu24h' | 'settledHeight'>;
 
 async function buildLive(): Promise<LiveBase> {
   const [statusRes, priceRes, inflationRes] = await Promise.allSettled([
@@ -65,14 +68,16 @@ export async function GET() {
   // of it taken at different times. Kept non-fatal (as the old allSettled branch was): a rolling
   // failure blanks those two items instead of failing the whole heartbeat.
   return diagJson('live', async () => {
-    const [cached, rolling] = await Promise.all([
-      unstable_cache(stamped(buildLive), ['live'], { revalidate: LIVE_TTL })(),
+    const [cached, rolling, settled] = await Promise.all([
+      staleCached(['live'], LIVE_TTL, stamped(buildLive)),
       getCachedRolling24hStats().catch(() => null),
+      getLastSettlement().catch(() => null),
     ]);
     const payload: LivePayload = {
       ...cached.data,
       relays24h: rolling?.relays24h ?? null,
       cu24h: rolling?.cu24h ?? null,
+      settledHeight: settled?.height ?? null,
     };
     return restamp(cached, payload);
   });

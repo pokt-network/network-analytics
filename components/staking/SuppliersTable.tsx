@@ -15,18 +15,31 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 // Shared suppliers table (Operator tool + Owner tool). Presentational: the parent fetches the page
-// and owns the page cursor; `right` holds the header controls (a status filter for the Owner tool).
+// and owns the page cursors (useCursorPages: each page after the first reads the rows after the previous
+// page's endCursor); `right` holds the header controls (a status filter for the Owner tool).
 export function SuppliersTable({
   data,
   page,
-  onPageChange,
+  canNext,
+  onPrev,
+  onNext,
+  error,
+  repeats = 0,
+  missed = 0,
   pageSize = 25,
   right,
   emptyLabel = 'No suppliers found.',
 }: {
   data: SupplierListPage | null;
   page: number;
-  onPageChange: (p: number) => void;
+  canNext: boolean;
+  onPrev: () => void;
+  onNext: () => void;
+  error?: string | null;
+  /** Rows of this page already shown on an earlier one, and (on the last page) rows the pages never showed: suppliers
+   *  whose stake crossed a page boundary while paging. */
+  repeats?: number;
+  missed?: number;
   pageSize?: number;
   right?: ReactNode;
   emptyLabel?: string;
@@ -37,7 +50,16 @@ export function SuppliersTable({
   return (
     <Card>
       <CardHeader title="Suppliers" icon={<IconUsers size={18} />} right={right} />
-      {!data ? (
+      {error ? (
+        <>
+          <EmptyState>{error}</EmptyState>
+          {/* a failed page keeps the way back */}
+          <div className="mt-3.5 flex justify-end gap-1.5 text-[13px] text-text-secondary">
+            <button type="button" disabled={page <= 1} onClick={onPrev} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Prev</button>
+            <button type="button" disabled onClick={onNext} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>
+          </div>
+        </>
+      ) : !data ? (
         <ChartSkeleton height={200} />
       ) : totalCount === 0 ? (
         <EmptyState>{emptyLabel}</EmptyState>
@@ -81,10 +103,18 @@ export function SuppliersTable({
           <div className="mt-3.5 flex items-center justify-between gap-3 text-[13px] text-text-secondary">
             <span>{formatNumber(totalCount)} suppliers · page {page} of {formatNumber(pages)}</span>
             <div className="flex gap-1.5">
-              <button type="button" disabled={page <= 1} onClick={() => onPageChange(page - 1)} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Prev</button>
-              <button type="button" disabled={page >= pages} onClick={() => onPageChange(page + 1)} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>
+              <button type="button" disabled={page <= 1} onClick={onPrev} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Prev</button>
+              <button type="button" disabled={!canNext} onClick={onNext} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>
             </div>
           </div>
+          {(repeats > 0 || missed > 0) && (
+            <p className="mt-3 text-[12px] text-text-tertiary">
+              {repeats > 0 && `${formatNumber(repeats)} of these suppliers were already on an earlier page. `}
+              {missed > 0 && `${formatNumber(missed)} suppliers were not on any page. `}
+              Their stake changed while paging (a slash or a top-up moves a supplier across pages); go back to page 1 for a
+              fresh read.
+            </p>
+          )}
         </>
       )}
     </Card>

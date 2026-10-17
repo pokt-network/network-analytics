@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { beginRequest, endRequest } from './loading-store';
 import { RANGE_KEYS } from './app-config';
 
@@ -8,6 +8,8 @@ interface State<T> {
   data: T | null;
   loading: boolean;
   error: string | null;
+  /** The url `data` was fetched for: while a new url loads, the previous one's data stays on screen. */
+  url?: string | null;
 }
 
 // ── Module-level SWR-lite cache ──────────────────────────────────────────────
@@ -25,6 +27,49 @@ interface CacheEntry {
   data: unknown;
   /** `x-cache` from the response — lets us skip sibling prefetch when the primary was a cold MISS. */
   cache: CacheState;
+  /** The settlement height known when it was fetched (null before the first heartbeat). */
+  settled: number | null;
+}
+
+// ── The last settlement, from the /api/live heartbeat (LiveStrip) ──
+// Reward panels change only at settlements: they refetch when this height moves, and not otherwise.
+let settledHeight: number | null = null;
+const settledListeners = new Set<() => void>();
+
+/** Set by LiveStrip from each heartbeat. Only forward: a lower height (an instance behind) would make panels bounce. */
+export function setSettledHeight(height: number | null): void {
+  if (height == null || (settledHeight != null && height <= settledHeight)) return;
+  settledHeight = height;
+  for (const l of settledListeners) l();
+}
+
+/** The settlement height known now (null before the first heartbeat). */
+export function currentSettledHeight(): number | null {
+  return settledHeight;
+}
+
+/** A cached entry, read only (tests, diagnostics). */
+export function cachedEntry(url: string): Readonly<CacheEntry> | undefined {
+  return cache.get(url);
+}
+
+/**
+ * Whether a cached entry is read again: by age (60 s), or for data that changes only at settlements (`bySettlement`)
+ * when the heartbeat's settlement has moved past the one it was fetched under; by age as well while no settlement is
+ * known, or for a response that also carries per-block fields (`alsoByAge`).
+ */
+export function needsRefetch(
+  entry: Pick<CacheEntry, 'ts' | 'settled'>,
+  o: { bySettlement: boolean; alsoByAge?: boolean; settled: number | null },
+): boolean {
+  const old = Date.now() - entry.ts > STALE_MS;
+  if (!o.bySettlement || o.settled == null || entry.settled == null) return old;
+  return entry.settled < o.settled || (o.alsoByAge === true && old);
+}
+
+function subscribeSettled(listener: () => void): () => void {
+  settledListeners.add(listener);
+  return () => settledListeners.delete(listener);
 }
 
 const cache = new Map<string, CacheEntry>();
@@ -38,6 +83,8 @@ const STALE_MS = 60_000;
 function fetchShared(url: string): Promise<unknown> {
   const existing = inflight.get(url);
   if (existing) return existing;
+  // the settlement the answer belongs to is the one known when the request starts
+  const settledAtStart = settledHeight;
 
   const p = fetch(url)
     .then(async (r) => {
@@ -48,7 +95,7 @@ function fetchShared(url: string): Promise<unknown> {
       }
       const cacheState = (r.headers.get('x-cache') as CacheState) ?? null;
       const json = await r.json();
-      cache.set(url, { ts: Date.now(), data: json, cache: cacheState });
+      cache.set(url, { ts: Date.now(), data: json, cache: cacheState, settled: settledAtStart });
       return json;
     })
     .finally(() => {
@@ -110,22 +157,29 @@ function maybePrefetchSiblings(url: string): void {
  * Serves cached data instantly on revisit, keeps prior data visible during a cold fetch (cleared if it fails), and reports
  * visible fetches to the global loading store so the shell can indicate activity.
  */
-export function useTabData<T>(url: string, opts: { prefetchSiblings?: boolean } = {}): State<T> {
+export function useTabData<T>(
+  url: string,
+  opts: { prefetchSiblings?: boolean; settled?: boolean; alsoByAge?: boolean } = {},
+): State<T> {
   // Sibling-range prefetch keeps range toggles instant, but it fires a request per RANGE_KEY. For
   // heavy endpoints (the operator tool's per-event resolvers, seconds each — and some ranges the
   // indexer can't compute at all), that's wasteful and hammers the bottleneck, so callers opt out.
   const doPrefetch = opts.prefetchSiblings !== false;
+  // `settled`: data that changes only at settlements, refetched when the heartbeat's settlement moves, not by age
+  const bySettlement = opts.settled === true;
+  const alsoByAge = opts.alsoByAge === true;
+  const settled = useSyncExternalStore(subscribeSettled, () => (bySettlement ? settledHeight : null), () => null);
 
   const [state, setState] = useState<State<T>>(() => {
     const c = url ? cache.get(url) : undefined;
-    return c ? { data: c.data as T, loading: false, error: null } : { data: null, loading: !!url, error: null };
+    return c ? { data: c.data as T, loading: false, error: null, url } : { data: null, loading: !!url, error: null, url: null };
   });
 
   useEffect(() => {
     if (!url) {
       // Intentional: this is a data-fetching hook; going idle on an empty url is the sync we want.
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setState({ data: null, loading: false, error: null });
+      setState({ data: null, loading: false, error: null, url: null });
       return;
     }
 
@@ -134,36 +188,38 @@ export function useTabData<T>(url: string, opts: { prefetchSiblings?: boolean } 
 
     if (cached) {
       // Instant paint from cache; quietly revalidate if it's gone stale (no indicator flash).
-      setState({ data: cached.data as T, loading: false, error: null });
+      setState({ data: cached.data as T, loading: false, error: null, url });
       // Already client-cached (a revisit) → the server built this at least once; warm the siblings
       // unless the last observed server state was cold.
       if (doPrefetch) maybePrefetchSiblings(url);
-      if (Date.now() - cached.ts > STALE_MS) {
+      // fetched before the first heartbeat: it belongs to the settlement known now
+      if (bySettlement && cached.settled == null) cached.settled = settled;
+      if (needsRefetch(cached, { bySettlement, alsoByAge, settled })) {
         fetchJson(url, false)
           .then((json) => {
-            if (active) setState({ data: json as T, loading: false, error: null });
+            if (active) setState({ data: json as T, loading: false, error: null, url });
           })
           .catch(() => {});
       }
     } else {
       // Cold for this URL: keep any prior data on screen, show the indicator, fetch.
-      setState((s) => ({ data: s.data, loading: true, error: null }));
+      setState((s) => ({ data: s.data, loading: true, error: null, url: s.url }));
       fetchJson(url, true)
         .then((json) => {
-          if (active) setState({ data: json as T, loading: false, error: null });
+          if (active) setState({ data: json as T, loading: false, error: null, url });
           // Only now is the primary's cache status known — prefetch siblings iff it wasn't a MISS.
           if (doPrefetch) maybePrefetchSiblings(url);
         })
         .catch((e: Error) => {
           // Drop the prior data: it belongs to the previous url and must not show under this one.
-          if (active && e.name !== 'AbortError') setState({ data: null, loading: false, error: e.message });
+          if (active && e.name !== 'AbortError') setState({ data: null, loading: false, error: e.message, url: null });
         });
     }
 
     return () => {
       active = false;
     };
-  }, [url, doPrefetch]);
+  }, [url, doPrefetch, bySettlement, alsoByAge, settled]);
 
   return state;
 }

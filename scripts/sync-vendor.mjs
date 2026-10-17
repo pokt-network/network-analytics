@@ -37,6 +37,16 @@ const MANIFEST = [
   'hooks/useStatus.ts',
 ];
 
+// Vendored files that knowingly differ from upstream: the sync leaves them as they are and --check lists them without
+// failing. Remove an entry once upstream carries the change (or the change is dropped here).
+const DIVERGED = {
+  'lib/graphql.ts':
+    'reads in flight outside a React render (this app\'s route handlers) share one process-wide map, where ' +
+    'pnf-explorer shares them only within a render; a stale answer is returned at once and read again after the ' +
+    'response; and while a failed read is held, a cached answer is served instead of the error. See the note at the ' +
+    'top of the file.',
+};
+
 const BANNER =
   '// ─────────────────────────────────────────────────────────────────────────────\n' +
   '// VENDORED from pnf-explorer — DO NOT EDIT HERE.\n' +
@@ -76,6 +86,11 @@ for (const rel of MANIFEST) {
 
   if (!drift) {
     console.log(`  ok    ${rel}`);
+    continue;
+  }
+
+  if (DIVERGED[rel]) {
+    console.log(`  KEPT  ${rel} (diverges on purpose: ${DIVERGED[rel]})`);
     continue;
   }
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { IconChevronUp, IconChevronDown, IconSelector, IconChevronLeft, IconChevronRight, IconDownload } from '@tabler/icons-react';
 import { toCsv, downloadCsv, csvFilename } from '@/lib/csv';
 
@@ -19,6 +19,14 @@ export interface Column<T> {
   hideOnMobile?: boolean;
 }
 
+/** What a server-paged table asks for: its page, its sort column and direction, and its search text. */
+export interface TableState {
+  page: number;
+  sortKey?: string;
+  sortDir: 'asc' | 'desc';
+  query: string;
+}
+
 interface Props<T> {
   rows: T[];
   columns: Column<T>[];
@@ -34,6 +42,10 @@ interface Props<T> {
   csvName?: string;
   /** Active range, appended to the CSV filename for provenance. */
   range?: string;
+  /** Paged by the server: `rows` is the page the server answered for the table's state (search, sort, page), which
+   *  `onState` reports on every change (the search after a pause in typing); `total` is the matching row count and
+   *  `exportRows` reads every matching row, in order, for the CSV. */
+  server?: { total: number; onState: (s: TableState) => void; exportRows: (s: TableState) => Promise<T[]> };
 }
 
 export function DataTable<T>({
@@ -49,6 +61,7 @@ export function DataTable<T>({
   onRowClick,
   csvName,
   range,
+  server,
 }: Props<T>) {
   const [query, setQuery] = useState('');
   const [sortKey, setSortKey] = useState<string | undefined>(initialSortKey);
@@ -57,12 +70,12 @@ export function DataTable<T>({
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q || !searchText) return rows;
+    if (!q || !searchText || server) return rows;
     return rows.filter((r) => searchText(r).toLowerCase().includes(q));
-  }, [rows, query, searchText]);
+  }, [rows, query, searchText, server]);
 
   const sorted = useMemo(() => {
-    const col = columns.find((c) => c.key === sortKey);
+    const col = server ? undefined : columns.find((c) => c.key === sortKey);
     if (!col?.sortValue) return filtered;
     const dir = sortDir === 'asc' ? 1 : -1;
     return [...filtered].sort((a, b) => {
@@ -71,15 +84,27 @@ export function DataTable<T>({
       if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
       return String(av).localeCompare(String(bv)) * dir;
     });
-  }, [filtered, columns, sortKey, sortDir]);
+  }, [filtered, columns, sortKey, sortDir, server]);
 
   // Export the full search-filtered set in the current sort order (all pages — pagination is only a
   // view chunk). Columns opt out of the CSV with `csvValue: null`; otherwise use `csvValue`, falling
   // back to `sortValue` for the raw underlying value (never the React-rendered cell).
   const csvColumns = columns.filter((c) => c.csvValue !== null);
-  function exportCsv() {
+  const [exporting, setExporting] = useState(false);
+  async function exportCsv() {
     const headers = csvColumns.map((c) => c.header || c.key);
-    const body = sorted.map((r) =>
+    let all = sorted;
+    if (server) {
+      setExporting(true);
+      try {
+        all = await server.exportRows({ page: clampedPage, sortKey, sortDir, query: debouncedQuery });
+      } catch {
+        return;
+      } finally {
+        setExporting(false);
+      }
+    }
+    const body = all.map((r) =>
       csvColumns.map((c) => {
         const get = c.csvValue ?? c.sortValue;
         return get ? get(r) : '';
@@ -88,13 +113,34 @@ export function DataTable<T>({
     downloadCsv(csvFilename(csvName ?? unit, range), toCsv(headers, body));
   }
 
-  const pages = Math.max(1, Math.ceil(sorted.length / pageSize));
+  const count = server ? server.total : sorted.length;
+  const pages = Math.max(1, Math.ceil(count / pageSize));
   const clampedPage = Math.min(page, pages);
   const start = (clampedPage - 1) * pageSize;
-  const pageRows = sorted.slice(start, start + pageSize);
+  const pageRows = server ? sorted : sorted.slice(start, start + pageSize);
+  const sortable = (c: Column<T>) => !!c.sortValue;
+
+  // Server mode: report the state; the search waits for a pause in typing so each keystroke is not a read.
+  const [debouncedQuery, setDebouncedQuery] = useState(query);
+  useEffect(() => {
+    if (!server) return;
+    const t = setTimeout(() => {
+      // the page returns to 1 with the search that commits, not before: the old search would be read for page 1
+      if (query !== debouncedQuery) setPage(1);
+      setDebouncedQuery(query);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [query, server, debouncedQuery]);
+  const onState = useRef(server?.onState);
+  useEffect(() => {
+    onState.current = server?.onState;
+  });
+  useEffect(() => {
+    onState.current?.({ page: clampedPage, sortKey, sortDir, query: debouncedQuery });
+  }, [clampedPage, sortKey, sortDir, debouncedQuery]);
 
   function toggleSort(col: Column<T>) {
-    if (!col.sortValue) return;
+    if (!sortable(col)) return;
     if (sortKey === col.key) {
       setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     } else {
@@ -112,7 +158,7 @@ export function DataTable<T>({
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
-              setPage(1);
+              if (!server) setPage(1);
             }}
             placeholder={searchPlaceholder}
             className="h-9 min-w-[200px] rounded-lg border bg-bg-surface px-3 text-[13px] text-text-primary outline-none focus:border-blue"
@@ -122,13 +168,13 @@ export function DataTable<T>({
         )}
         <div className="flex items-center gap-3">
           <span className="text-[12px] text-text-tertiary">
-            {sorted.length} {unit} · page {clampedPage} of {pages}
+            {count} {unit} · page {clampedPage} of {pages}
           </span>
           <button
             type="button"
             onClick={exportCsv}
-            disabled={sorted.length === 0}
-            title={sorted.length === 0 ? 'No rows to download' : `Download CSV (${sorted.length} ${unit})`}
+            disabled={count === 0 || exporting}
+            title={count === 0 ? 'No rows to download' : `Download CSV (${count} ${unit})`}
             aria-label="Download CSV"
             className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border bg-bg-card text-text-secondary transition-colors hover:enabled:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
           >
@@ -149,13 +195,13 @@ export function DataTable<T>({
                     onClick={() => toggleSort(c)}
                     className={`border-b px-1.5 pb-[11px] text-[11px] font-medium uppercase tracking-[0.5px] text-text-secondary sm:px-3 ${
                       c.align === 'right' ? 'text-right' : 'text-left'
-                    } ${c.sortValue ? 'cursor-pointer select-none hover:text-text-primary' : ''} ${
+                    } ${sortable(c) ? 'cursor-pointer select-none hover:text-text-primary' : ''} ${
                       c.hideOnMobile ? 'hidden sm:table-cell' : ''
                     } whitespace-normal sm:whitespace-nowrap`}
                   >
                     <span className="inline-flex items-center gap-1">
                       {c.header}
-                      {c.sortValue &&
+                      {sortable(c) &&
                         (active ? (
                           sortDir === 'asc' ? (
                             <IconChevronUp size={13} className="text-blue-soft" />
@@ -204,7 +250,7 @@ export function DataTable<T>({
       {pages > 1 && (
         <div className="mt-3.5 flex items-center justify-between gap-3 text-[13px] text-text-secondary">
           <span>
-            Showing {sorted.length === 0 ? 0 : start + 1}–{Math.min(start + pageSize, sorted.length)} of {sorted.length}
+            Showing {count === 0 ? 0 : start + 1}–{Math.min(start + pageSize, count)} of {count}
           </span>
           <div className="flex gap-1.5">
             <PagerBtn disabled={clampedPage <= 1} onClick={() => setPage(clampedPage - 1)}>
