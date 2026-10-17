@@ -22,7 +22,7 @@ let lastShort: { at: number; list: ServicesList } | null = null;
 
 export async function GET() {
   return diagJson('services-list', async () => {
-    if (lastShort && Date.now() - lastShort.at < SHORT_TTL_MS) return lastShort.list;
+    if (lastShort && Date.now() - lastShort.at < SHORT_TTL_MS) return stamped(async () => lastShort!.list)();
     try {
       return await staleCached(
         ['services-list'],
@@ -38,7 +38,7 @@ export async function GET() {
     } catch (e) {
       if (e instanceof ShortList) {
         lastShort = { at: Date.now(), list: e.list };
-        return e.list;
+        return stamped(async () => e.list)();
       }
       throw e;
     }

@@ -16,6 +16,8 @@ export interface TimeWindow {
  *  any indexer-side caching — making every cold build maximally expensive. 60s keeps the data
  *  effectively live (analytics already tolerate minutes of staleness) while collapsing the key space. */
 export const WINDOW_BUCKET_MS = 60_000;
+// The slashing `at` round-trips through whole minutes, so the bucket must be a whole number of them.
+if (WINDOW_BUCKET_MS % 60_000 !== 0) throw new Error('WINDOW_BUCKET_MS must be a whole number of minutes');
 
 export function rangeWindow(range: RangeKey, now: number = Date.now()): TimeWindow {
   const spec = RANGE_SPECS[range];
