@@ -20,11 +20,16 @@ export function nextCache() {
       entries.set(key, { value, lastModified: performance.timeOrigin + performance.now() });
     }
   }
+  const manifest = { version: 4, routes: {}, dynamicRoutes: {}, notFoundRoutes: [], preview: { previewModeId: 'test' } };
   const cache = new IncrementalCache({
     dev: false,
     minimalMode: false,
     requestHeaders: {},
-    getPrerenderManifest: () => ({ version: 4, routes: {}, dynamicRoutes: {}, notFoundRoutes: [], preview: { previewModeId: 'test' } }),
+    // Next up to 16.2 took getPrerenderManifest(); 16.4 takes the manifest itself and previewProps. Both are given,
+    // so the harness runs on either.
+    getPrerenderManifest: () => manifest,
+    prerenderManifest: manifest,
+    previewProps: manifest.preview,
     CurCacheHandler: AgingHandler,
   });
   const realNow = Date.now;
