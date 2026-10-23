@@ -33,6 +33,7 @@ function memoryCache() {
     isOnDemandRevalidate: false,
     entries,
     generateCacheKey: async (key) => key,
+    generateSimpleCacheKey: async (key) => key, // Next 16.4's unstable_cache keys with this one
     get: async (key) => (entries.has(key) ? { value: entries.get(key), isStale: false } : null),
     set: async (key, value) => void entries.set(key, value),
   };

@@ -18,6 +18,10 @@ function memoryCache() {
     async generateCacheKey(key) {
       return key;
     },
+    // Next 16.4's unstable_cache keys its entry with this one (16.2 called generateCacheKey)
+    async generateSimpleCacheKey(key) {
+      return key;
+    },
     async get(key) {
       const value = entries.get(key);
       return value ? { value, isStale: false } : null;
