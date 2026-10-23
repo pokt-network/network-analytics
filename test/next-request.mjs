@@ -9,6 +9,7 @@ globalThis.AsyncLocalStorage = AsyncLocalStorage; // a Next server provides it b
 const require = createRequire(import.meta.url);
 const { IncrementalCache } = require('next/dist/server/lib/incremental-cache/index.js');
 const { workAsyncStorage } = require('next/dist/server/app-render/work-async-storage.external.js');
+const { workUnitAsyncStorage } = require('next/dist/server/app-render/work-unit-async-storage.external.js');
 
 export function nextCache() {
   const entries = new Map();
@@ -61,10 +62,13 @@ export async function request(cache, fn) {
     pendingRevalidates: {},
     afterContext: { after: (task) => callbacks.push(task) },
   };
-  const result = await workAsyncStorage.run(store, fn);
+  // Next 16.4's after() also needs the request's work-unit store (16.2 read the work store alone).
+  const unit = { type: 'request', phase: 'action', url: { pathname: '/test', search: '' }, implicitTags: undefined };
+  const inRequest = (f) => workAsyncStorage.run(store, () => workUnitAsyncStorage.run(unit, f));
+  const result = await inRequest(fn);
   const queued = callbacks.length;
   const drain = () =>
-    workAsyncStorage.run(store, async () => {
+    inRequest(async () => {
       const before = new Set(Object.values(store.pendingRevalidates));
       for (let i = 0; i < callbacks.length; i++) await callbacks[i]();
       await Promise.all(Object.values(store.pendingRevalidates).filter((p) => !before.has(p)));
