@@ -7,10 +7,13 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --experimental-transform-types --import ./test/register.mjs --test test/*.test.mjs && node --conditions=react-server --experimental-transform-types --import ./test/register.mjs --test test/react-server/*.test.mjs",
+    "test": "node --import ./test/register.mjs --test test/*.test.mjs && node --conditions=react-server --import ./test/register.mjs --test test/react-server/*.test.mjs",
     "sync-vendor": "node scripts/sync-vendor.mjs",
     "sync-vendor:check": "node scripts/sync-vendor.mjs --check",
     "precompute": "node scripts/precompute-economics.mjs"
+  },
+  "engines": {
+    "node": ">=24"
   },
   "dependencies": {
     "@tabler/icons-react": "^3.34.0",
