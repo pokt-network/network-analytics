@@ -3,16 +3,17 @@ import { toDate } from '@/lib/time';
 import { NETWORK } from '@/lib/app-config';
 import { UPOKT_PER_POKT } from '@/lib/config';
 import { dayWindow } from '@/lib/timeranges';
-import { TOTAL_SUPPLY_BY_DAY, SUPPLY_COMPOSITION, TOKENOMICS_PARAM } from '@/lib/queries/analytics';
+import { SUPPLY_BY_DAY, SUPPLY_COMPOSITION, TOKENOMICS_PARAM } from '@/lib/queries/analytics';
 import { getRewardsByDate } from './rewards';
 import { num, parseScalar } from './_util';
+import { unwrapRange } from './coverage';
 
 const toPokt = (u: number) => u / UPOKT_PER_POKT;
 
-// ── Supply history (getTotalSupplyByDay) ────────────────────────────────────────
+// ── Supply history (getSupplyJson, by day) ──────────────────────────────────────
 interface SupplyRaw {
-  day: string;
-  total_supply: number | string;
+  bucket_start: string;
+  total_supply_upokt: number | string;
 }
 export interface SupplyPoint {
   date: string;
@@ -20,14 +21,15 @@ export interface SupplyPoint {
 }
 
 export async function getSupplyHistory(startISO: string, endISO: string, revalidate = 3600): Promise<SupplyPoint[]> {
-  const data = await gqlFetch<{ getTotalSupplyByDay: unknown }>(
+  const data = await gqlFetch<{ getSupplyJson: unknown }>(
     NETWORK,
-    TOTAL_SUPPLY_BY_DAY,
+    SUPPLY_BY_DAY,
     { start: startISO, end: endISO },
     { revalidate },
   );
-  return parseScalar<SupplyRaw[]>(data.getTotalSupplyByDay)
-    .map((r) => ({ date: toDate(r.day)?.toISOString() ?? r.day, totalSupplyPokt: toPokt(num(r.total_supply)) }))
+  // a day the indexer does not cover has no row (not a zero), as before
+  return (unwrapRange<SupplyRaw[]>(parseScalar(data.getSupplyJson), false).data ?? [])
+    .map((r) => ({ date: toDate(r.bucket_start)?.toISOString() ?? r.bucket_start, totalSupplyPokt: toPokt(num(r.total_supply_upokt)) }))
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
@@ -60,7 +62,7 @@ export async function getMintRatio(): Promise<number> {
 // ── Burn vs Mint ────────────────────────────────────────────────────────────────
 // Per PIP-41 each settlement burns the full claimed amount and re-mints mintRatio of it:
 //   mint = claimed × mint_ratio,  burn = claimed  → net = claimed × (mint_ratio − 1) (deflation).
-// The daily Σclaimed is getRewardsByDate.claimed_amount, so gross burn/mint are derivable live
+// The daily Σclaimed is getNetworkRewardsJson's claimed_upokt, so gross burn/mint are derivable live
 // (no per-settlement scan). Verified: mockup mint/burn ratio == mint_ratio (0.975).
 export interface BurnMintPoint {
   date: string;
@@ -82,11 +84,16 @@ export async function getBurnMint(
   });
 }
 
-// ── Supply composition (getSupplyCompositionBetweenDates, latest point) ──────────
+// ── Supply composition (getSupplyCompositionJson + getSupplyJson, latest point) ──
+// One composition row per label and bucket, and the bucket's totals in the supply rows, both at the same block.
 interface CompRaw {
-  date_truncated: string;
-  total_supply: number | string;
-  network_supply_composition: Array<{ label: string; amount: number | string }>;
+  height: string;
+  label: string;
+  amount_upokt: number | string;
+}
+interface CompSupplyRaw {
+  height: string;
+  total_supply_upokt: number | string;
 }
 export interface CompSlice {
   label: string;
@@ -96,19 +103,21 @@ export interface CompSlice {
 
 export async function getComposition(): Promise<CompSlice[]> {
   const { startISO, endISO } = dayWindow(3);
-  const data = await gqlFetch<{ getSupplyCompositionBetweenDates: unknown }>(
+  const data = await gqlFetch<{ composition: unknown; supply: unknown }>(
     NETWORK,
     SUPPLY_COMPOSITION,
     { start: startISO, end: endISO, interval: 'day' },
     { revalidate: 3600 },
   );
-  const arr = parseScalar<CompRaw[]>(data.getSupplyCompositionBetweenDates);
-  const latest = arr[arr.length - 1];
+  const rows = unwrapRange<CompRaw[]>(parseScalar(data.composition), false).data ?? [];
+  const supply = unwrapRange<CompSupplyRaw[]>(parseScalar(data.supply), false).data ?? [];
+  // the latest point both answers hold (the same block: each bucket's last one with an upokt supply)
+  const latest = supply.filter((s) => rows.some((r) => r.height === s.height)).sort((a, b) => num(b.height) - num(a.height))[0];
   if (!latest) return [];
   const comp = new Map<string, number>();
-  for (const c of latest.network_supply_composition ?? []) comp.set(c.label, num(c.amount));
+  for (const c of rows) if (c.height === latest.height) comp.set(c.label, num(c.amount_upokt));
   const get = (k: string) => comp.get(k) ?? 0;
-  const total = num(latest.total_supply);
+  const total = num(latest.total_supply_upokt);
   const allocated = [...comp.values()].reduce((s, v) => s + v, 0);
 
   // Label semantics (verified): `others` = free/circulating balances (the big liquid bucket);
