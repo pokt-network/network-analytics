@@ -65,15 +65,38 @@ export const NETWORK_USAGE_STAKED = /* GraphQL */ `
   }
 `;
 
-export const REWARDS_BY_DATE = /* GraphQL */ `
-  query rewardsByDate($start: Datetime, $end: Datetime, $interval: String) {
-    getRewardsByDate(startDate: $start, endDate: $end, truncInterval: $interval)
+// Network totals of the settled claims per bucket (the catalog's replacement for getRewardsByDate).
+export const NETWORK_REWARDS = /* GraphQL */ `
+  query networkRewards($start: Datetime!, $end: Datetime!, $interval: String) {
+    getNetworkRewardsJson(rangeStart: $start, rangeEnd: $end, bucket: $interval)
   }
 `;
 
-export const LATEST_BLOCKS_BY_DAY = /* GraphQL */ `
-  query latestBlocksByDay($start: Datetime, $end: Datetime) {
-    getLatestBlocksByDay(startDate: $start, endDate: $end)
+// Each day's last block (last_height), then those blocks' staked counts and tokens: the catalog's replacement for
+// getLatestBlocksByDay, in two requests.
+export const BLOCK_STATS_BY_DAY = /* GraphQL */ `
+  query blockStatsByDay($start: Datetime!, $end: Datetime!) {
+    getBlockStatsJson(rangeStart: $start, rangeEnd: $end, bucket: "day")
+  }
+`;
+
+export const BLOCK_SNAPSHOTS = /* GraphQL */ `
+  query blockSnapshots($ids: [BigFloat!]!, $first: Int!) {
+    blocks(filter: { id: { in: $ids } }, first: $first) {
+      nodes {
+        id
+        stakedValidators
+        stakedSuppliers
+        stakedApps
+        stakedGateways
+        unstakingSuppliers
+        unstakedSuppliers
+        stakedValidatorsTokens
+        stakedSuppliersTokens
+        stakedAppsTokens
+        stakedGatewaysTokens
+      }
+    }
   }
 `;
 
@@ -85,9 +108,10 @@ export const SERVICES_COUNT = /* GraphQL */ `
   }
 `;
 
-export const CLAIM_PROOFS_BY_TIME = /* GraphQL */ `
-  query claimProofsByTime($start: Datetime, $end: Datetime, $interval: String) {
-    getClaimProofsDataByTime(startTs: $start, endTs: $end, truncInterval: $interval)
+// Claims created, settled and expired per bucket (the catalog's replacement for getClaimProofsDataByTime).
+export const NETWORK_CLAIMS = /* GraphQL */ `
+  query networkClaims($start: Datetime!, $end: Datetime!, $interval: String) {
+    getNetworkClaimsJson(rangeStart: $start, rangeEnd: $end, bucket: $interval)
   }
 `;
 
@@ -103,15 +127,19 @@ export const SUPPLIER_DOMAINS = /* GraphQL */ `
   }
 `;
 
-export const TOTAL_SUPPLY_BY_DAY = /* GraphQL */ `
-  query totalSupplyByDay($start: Datetime, $end: Datetime) {
-    getTotalSupplyByDay(startDate: $start, endDate: $end)
+// Total supply per day, at each day's last block with an upokt supply (the catalog's replacement for getTotalSupplyByDay).
+export const SUPPLY_BY_DAY = /* GraphQL */ `
+  query supplyByDay($start: Datetime!, $end: Datetime!) {
+    getSupplyJson(rangeStart: $start, rangeEnd: $end, bucket: "day")
   }
 `;
 
+// Supply composition per bucket (one row per label) and the totals at the same points (the catalog's replacement for
+// getSupplyCompositionBetweenDates).
 export const SUPPLY_COMPOSITION = /* GraphQL */ `
-  query supplyComposition($start: Datetime, $end: Datetime, $interval: String) {
-    getSupplyCompositionBetweenDates(startDate: $start, endDate: $end, truncInterval: $interval)
+  query supplyComposition($start: Datetime!, $end: Datetime!, $interval: String) {
+    composition: getSupplyCompositionJson(rangeStart: $start, rangeEnd: $end, bucket: $interval)
+    supply: getSupplyJson(rangeStart: $start, rangeEnd: $end, bucket: $interval)
   }
 `;
 
@@ -341,9 +369,9 @@ export const REWARDS_BY_ADDRESSES_SERVICE = /* GraphQL */ `
   }
 `;
 
-export const OVERSERVICED_BY_ADDRESSES = /* GraphQL */ `
-  query overservicedByAddresses($addresses: [String!], $start: Datetime, $end: Datetime, $interval: String) {
-    getOverservicedByAddressesAndTime(addresses: $addresses, startTs: $start, endTs: $end, truncInterval: $interval)
+export const OVERSERVICED_BY_OPERATORS = /* GraphQL */ `
+  query overservicedByOperators($operators: [String], $start: Datetime!, $end: Datetime!, $interval: String) {
+    getOverservicedJson(operators: $operators, rangeStart: $start, rangeEnd: $end, bucket: $interval)
   }
 `;
 

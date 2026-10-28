@@ -2,21 +2,21 @@ import { staleValue } from '@/lib/window-cache';
 import { gqlFetch } from '@/lib/graphql';
 import { toDate } from '@/lib/time';
 import { NETWORK } from '@/lib/app-config';
-import { NETWORK_USAGE, REWARDS_BY_DATE } from '@/lib/queries/analytics';
+import { NETWORK_USAGE, NETWORK_REWARDS } from '@/lib/queries/analytics';
 import { fixedWindow } from '@/lib/timeranges';
 import { num, parseScalar } from './_util';
 import { unwrapRange } from './coverage';
 
-// Network-wide rewards/relays/CU over time (getRewardsByDate). Backs the Network-wide series and
+// Network-wide rewards/relays/CU over time (getNetworkRewardsJson). Backs the Network-wide series and
 // the Traffic 24h stat deltas. Both claimed and estimated present; caller picks which to show.
 
 interface RewardRaw {
-  date_truncated: string;
+  bucket_start: string;
   relays: number | string;
   estimated_relays: number | string;
-  computed_units: number | string;
-  estimated_computed_units: number | string;
-  claimed_amount: number | string;
+  compute_units: number | string;
+  estimated_compute_units: number | string;
+  claimed_upokt: number | string;
 }
 
 export interface RewardPoint {
@@ -34,21 +34,22 @@ export async function getRewardsByDate(
   interval: 'hour' | 'day' | 'week',
   revalidate = 300,
 ): Promise<RewardPoint[]> {
-  const data = await gqlFetch<{ getRewardsByDate: unknown }>(
+  const data = await gqlFetch<{ getNetworkRewardsJson: unknown }>(
     NETWORK,
-    REWARDS_BY_DATE,
+    NETWORK_REWARDS,
     { start: startISO, end: endISO, interval },
     { revalidate },
   );
-  const raw = parseScalar<RewardRaw[]>(data.getRewardsByDate);
+  // a bucket the indexer does not cover has no row (not a zero), as before
+  const raw = unwrapRange<RewardRaw[]>(parseScalar(data.getNetworkRewardsJson), false).data ?? [];
   return raw
     .map((r) => ({
-      date: toDate(r.date_truncated)?.toISOString() ?? r.date_truncated,
+      date: toDate(r.bucket_start)?.toISOString() ?? r.bucket_start,
       relays: num(r.relays),
       estimatedRelays: num(r.estimated_relays),
-      computedUnits: num(r.computed_units),
-      estimatedComputedUnits: num(r.estimated_computed_units),
-      claimedAmount: num(r.claimed_amount),
+      computedUnits: num(r.compute_units),
+      estimatedComputedUnits: num(r.estimated_compute_units),
+      claimedAmount: num(r.claimed_upokt),
     }))
     .sort((a, b) => a.date.localeCompare(b.date));
 }

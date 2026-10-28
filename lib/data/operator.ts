@@ -8,7 +8,7 @@ import {
   OPERATOR_CLAIMS_SETTLED,
   OPERATOR_CLAIM_PENALTIES,
   REWARDS_BY_ADDRESSES_SERVICE,
-  OVERSERVICED_BY_ADDRESSES,
+  OVERSERVICED_BY_OPERATORS,
   SUPPLIER_SLASHES,
   SUPPLIER_SLASH_PAGE,
   SUPPLIER_SLASH_TOTALS,
@@ -172,9 +172,9 @@ export async function getOperatorRewardsByService(addresses: string[], range: Ra
 
 // ── Overserviced (expected vs effective burn) ──
 interface OverservicedRaw {
-  date_truncated: string;
-  expected_burn: number | string;
-  effective_burn: number | string;
+  bucket_start: string;
+  expected_burn_upokt: number | string;
+  effective_burn_upokt: number | string;
 }
 
 export interface OverservicedPoint {
@@ -184,18 +184,20 @@ export interface OverservicedPoint {
 }
 
 export async function getOperatorOverserviced(addresses: string[], range: RangeKey): Promise<OverservicedPoint[]> {
-  const w = settledWindow(range, await getLastSettlement(), true);
-  const data = await gqlFetch<{ getOverservicedByAddressesAndTime: unknown }>(
+  // the catalog's window is half-open: it ends 1 µs after the settlement block, so it still reads that block
+  const w = settledWindow(range, await getLastSettlement(), false);
+  const data = await gqlFetch<{ getOverservicedJson: unknown }>(
     NETWORK,
-    OVERSERVICED_BY_ADDRESSES,
-    { addresses, start: w.startISO, end: w.endISO, interval: w.interval },
+    OVERSERVICED_BY_OPERATORS,
+    { operators: addresses, start: w.startISO, end: w.endISO, interval: w.interval },
     { revalidate: rangeTTL(range) },
   );
-  return parseScalar<OverservicedRaw[]>(data.getOverservicedByAddressesAndTime)
+  // a bucket the indexer does not cover has no row (not a zero), as before
+  return (unwrapRange<OverservicedRaw[]>(parseScalar(data.getOverservicedJson), false).data ?? [])
     .map((r) => ({
-      date: toDate(r.date_truncated)?.toISOString() ?? r.date_truncated,
-      expectedPokt: toPokt(num(r.expected_burn)),
-      effectivePokt: toPokt(num(r.effective_burn)),
+      date: toDate(r.bucket_start)?.toISOString() ?? r.bucket_start,
+      expectedPokt: toPokt(num(r.expected_burn_upokt)),
+      effectivePokt: toPokt(num(r.effective_burn_upokt)),
     }))
     .sort((a, b) => a.date.localeCompare(b.date));
 }
