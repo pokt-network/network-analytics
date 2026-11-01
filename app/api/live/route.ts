@@ -2,7 +2,7 @@ import { unstable_cache } from 'next/cache';
 import { getStatus } from '@/lib/metadata';
 import { INDEXER_LAG_THRESHOLD } from '@/lib/config';
 import { NETWORK } from '@/lib/app-config';
-import { getPoktPrice, type PoktPrice } from '@/lib/price';
+import { getCachedPoktPrice, type PoktPrice } from '@/lib/price';
 import { getCachedRolling24hStats } from '@/lib/data/rewards';
 import { getNetInflationPctYr } from '@/lib/data/economy';
 import { diagJson, restamp, stamped } from '@/lib/diagnostics';
@@ -11,9 +11,11 @@ import { diagJson, restamp, stamped } from '@/lib/diagnostics';
 // Polled by the LiveStrip client every 15s.
 export const dynamic = 'force-dynamic';
 
-// Micro-cache the assembled heartbeat so many concurrent sessions don't each pay the ~1.4s
-// indexer+CMC round-trip. 10s < the client's 15s poll, so the strip stays effectively live while
-// indexer/CMC load is bounded to one refresh per 10s regardless of traffic.
+// Micro-cache the assembled heartbeat so many concurrent sessions don't each pay the ~1.4s indexer
+// round-trip. 10s < the client's 15s poll, so the strip stays effectively live while indexer load is
+// bounded to one refresh per 10s regardless of traffic. Price is NOT built here — it reads its own
+// 5-min shared entry (getCachedPoktPrice), merged in at GET, so the 10s heartbeat never pays a CMC
+// credit (CMC's free cap is 15k/month; see lib/price.ts).
 const LIVE_TTL = 10;
 
 export interface LivePayload {
@@ -27,14 +29,15 @@ export interface LivePayload {
   netInflation: number | null;
 }
 
-/** What the 10s `live` entry stores. The rolling-24h numbers are merged in by the handler from the
- *  shared entry so the strip and the Traffic cards read the exact same value (see GET). */
-type LiveBase = Omit<LivePayload, 'relays24h' | 'cu24h'>;
+/** What the 10s `live` entry stores. The rolling-24h numbers and the price are merged in by the
+ *  handler from their own shared entries so every surface reads the exact same value (see GET).
+ *  Price is excluded here on purpose: it is CMC-credit-metered, so it lives on a 5-min TTL of its
+ *  own rather than refreshing with this 10s heartbeat. */
+type LiveBase = Omit<LivePayload, 'relays24h' | 'cu24h' | 'price'>;
 
 async function buildLive(): Promise<LiveBase> {
-  const [statusRes, priceRes, inflationRes] = await Promise.allSettled([
+  const [statusRes, inflationRes] = await Promise.allSettled([
     getStatus(NETWORK),
-    getPoktPrice(),
     getNetInflationPctYr(),
   ]);
 
@@ -54,7 +57,6 @@ async function buildLive(): Promise<LiveBase> {
     block,
     healthy,
     lag,
-    price: priceRes.status === 'fulfilled' ? priceRes.value : null,
     netInflation: inflationRes.status === 'fulfilled' ? inflationRes.value : null,
   };
 }
@@ -65,12 +67,14 @@ export async function GET() {
   // of it taken at different times. Kept non-fatal (as the old allSettled branch was): a rolling
   // failure blanks those two items instead of failing the whole heartbeat.
   return diagJson('live', async () => {
-    const [cached, rolling] = await Promise.all([
+    const [cached, rolling, price] = await Promise.all([
       unstable_cache(stamped(buildLive), ['live'], { revalidate: LIVE_TTL })(),
       getCachedRolling24hStats().catch(() => null),
+      getCachedPoktPrice().catch(() => null),
     ]);
     const payload: LivePayload = {
       ...cached.data,
+      price,
       relays24h: rolling?.relays24h ?? null,
       cu24h: rolling?.cu24h ?? null,
     };

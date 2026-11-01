@@ -1,3 +1,5 @@
+import { unstable_cache } from 'next/cache';
+
 // POKT price / market cap via CoinMarketCap. SERVER-SIDE ONLY — the key is never exposed to the
 // client (brief §1). Degrades to null (UI shows "—") when no key is configured or CMC errors.
 
@@ -15,7 +17,9 @@ export async function getPoktPrice(): Promise<PoktPrice | null> {
   try {
     const res = await fetch(CMC_URL, {
       headers: { 'X-CMC_PRO_API_KEY': key, Accept: 'application/json' },
-      next: { revalidate: 60 }, // short TTL cache
+      // No per-fetch cache: `getCachedPoktPrice` (below) owns the TTL. A `next: { revalidate }` here
+      // would be a second, conflicting cache layer — and is ignored anyway inside `unstable_cache`.
+      cache: 'no-store',
     });
     if (!res.ok) return null;
     const json = (await res.json()) as {
@@ -35,3 +39,19 @@ export async function getPoktPrice(): Promise<PoktPrice | null> {
     return null;
   }
 }
+
+// CoinMarketCap bills ~1 credit per quotes/latest call, and the Basic (free) plan caps at 15,000
+// credits/month. Price is this dashboard's ONLY CMC draw, so a single shared entry governs every
+// surface that shows it (the /api/live strip + /api/price), refreshed at most once per PRICE_TTL
+// regardless of traffic or how many serverless instances are warm.
+//
+//   TTL 300s → ≤1 call / 5 min → ≤288/day → ≤~8,640 per 30-day month  (~58% of the 15k cap)
+//
+// For comparison, reading CMC on each 15s live-strip poll burns ~5,760/day → ~170k/month, which
+// exhausts the free cap in ~2.6 days. Near-time pricing is fine for the analytics dashboard, so up
+// to 5 min of staleness is the trade for staying well under budget; raise PRICE_TTL for more margin.
+const PRICE_TTL = 300;
+
+/** Process-wide shared price entry. Route handlers call THIS, never `getPoktPrice` directly, so CMC
+ *  is hit at most once per PRICE_TTL across the whole app (see the credit-budget note above). */
+export const getCachedPoktPrice = unstable_cache(getPoktPrice, ['pokt-price'], { revalidate: PRICE_TTL });
