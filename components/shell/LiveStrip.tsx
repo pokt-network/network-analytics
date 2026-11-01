@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { formatNumber, formatCompact } from '@/lib/format';
 import type { LivePayload } from '@/app/api/live/route';
+import { setSettledHeight } from '@/lib/use-tab-data';
 
 const POLL_MS = 15_000;
 
@@ -26,6 +27,7 @@ export function LiveStrip() {
         const json = (await res.json()) as LivePayload;
         if (!active) return;
         setData(json);
+        setSettledHeight(json.settledHeight);
         setErr(false);
       } catch (e) {
         if (active && (e as Error)?.name !== 'AbortError') setErr(true);

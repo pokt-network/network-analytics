@@ -1,32 +1,37 @@
 import { gqlFetch } from '@/lib/graphql';
 import { toDate } from '@/lib/time';
 import { NETWORK } from '@/lib/app-config';
-import { LATEST_BLOCKS_BY_DAY } from '@/lib/queries/analytics';
+import { BLOCK_STATS_BY_DAY, BLOCK_SNAPSHOTS } from '@/lib/queries/analytics';
 import { fixedWindow } from '@/lib/timeranges';
 import { num, parseScalar } from './_util';
+import { unwrapRange } from './coverage';
 
-// getLatestBlocksByDay: one denormalized daily block snapshot backs ALL actor-count and staked-POKT
+// Each day's last block (getBlockStatsJson's last_height, then that block): one denormalized daily block snapshot backs ALL actor-count and staked-POKT
 // evolution charts (Network + Suppliers) plus the "serving suppliers" stat. ≤24h stale — label
 // snapshot-sourced numbers "as of last daily snapshot".
 
 interface BlockRaw {
   id: number | string;
-  timestamp: string;
-  staked_validators: number | string;
-  staked_suppliers: number | string;
-  staked_apps: number | string;
-  staked_gateways: number | string;
-  unstaking_suppliers: number | string;
-  unstaked_suppliers: number | string;
-  staked_validators_tokens: number | string;
-  staked_suppliers_tokens: number | string;
-  staked_apps_tokens: number | string;
-  staked_gateways_tokens: number | string;
+  stakedValidators: number | string;
+  stakedSuppliers: number | string;
+  stakedApps: number | string;
+  stakedGateways: number | string;
+  unstakingSuppliers: number | string;
+  unstakedSuppliers: number | string;
+  stakedValidatorsTokens: number | string;
+  stakedSuppliersTokens: number | string;
+  stakedAppsTokens: number | string;
+  stakedGatewaysTokens: number | string;
 }
 
 interface SnapshotRaw {
   date: string;
   block: BlockRaw;
+}
+
+interface DayStatsRaw {
+  bucket_start: string;
+  last_height: string;
 }
 
 export interface NetworkSnapshot {
@@ -50,27 +55,38 @@ function map(s: SnapshotRaw): NetworkSnapshot {
   return {
     date: toDate(s.date)?.toISOString() ?? s.date,
     blockHeight: num(b.id),
-    stakedValidators: num(b.staked_validators),
-    stakedSuppliers: num(b.staked_suppliers),
-    stakedApps: num(b.staked_apps),
-    stakedGateways: num(b.staked_gateways),
-    unstakingSuppliers: num(b.unstaking_suppliers),
-    unstakedSuppliers: num(b.unstaked_suppliers),
-    validatorTokens: num(b.staked_validators_tokens),
-    supplierTokens: num(b.staked_suppliers_tokens),
-    appTokens: num(b.staked_apps_tokens),
-    gatewayTokens: num(b.staked_gateways_tokens),
+    stakedValidators: num(b.stakedValidators),
+    stakedSuppliers: num(b.stakedSuppliers),
+    stakedApps: num(b.stakedApps),
+    stakedGateways: num(b.stakedGateways),
+    unstakingSuppliers: num(b.unstakingSuppliers),
+    unstakedSuppliers: num(b.unstakedSuppliers),
+    validatorTokens: num(b.stakedValidatorsTokens),
+    supplierTokens: num(b.stakedSuppliersTokens),
+    appTokens: num(b.stakedAppsTokens),
+    gatewayTokens: num(b.stakedGatewaysTokens),
   };
 }
 
 export async function getSnapshots(startISO: string, endISO: string, revalidate = 3600): Promise<NetworkSnapshot[]> {
-  const data = await gqlFetch<{ getLatestBlocksByDay: unknown }>(
+  const stats = await gqlFetch<{ getBlockStatsJson: unknown }>(
     NETWORK,
-    LATEST_BLOCKS_BY_DAY,
+    BLOCK_STATS_BY_DAY,
     { start: startISO, end: endISO },
     { revalidate },
   );
-  return parseScalar<SnapshotRaw[]>(data.getLatestBlocksByDay)
+  // a day the indexer does not cover has no row (no snapshot), as before
+  const days = (unwrapRange<DayStatsRaw[]>(parseScalar(stats.getBlockStatsJson), false).data ?? []).filter((d) => d.last_height != null);
+  if (days.length === 0) return [];
+  const blocks = await gqlFetch<{ blocks: { nodes: BlockRaw[] } }>(
+    NETWORK,
+    BLOCK_SNAPSHOTS,
+    { ids: days.map((d) => d.last_height), first: days.length },
+    { revalidate },
+  );
+  const byId = new Map((blocks.blocks?.nodes ?? []).map((b) => [String(b.id), b]));
+  return days
+    .map((d): SnapshotRaw => ({ date: d.bucket_start, block: byId.get(String(d.last_height))! }))
     .filter((s) => s?.block)
     .map(map)
     .sort((a, b) => a.date.localeCompare(b.date));

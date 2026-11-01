@@ -21,7 +21,7 @@ export function OverservicedTab() {
   const { addresses, range } = useStakingTool();
   const d = useTabData<OverservicedPoint[]>(
     addresses.length ? `/api/operator/overserviced?addresses=${addresses.join(',')}&range=${range}` : '',
-    { prefetchSiblings: false },
+    { prefetchSiblings: false, settled: true },
   );
   const poktFmt = useMemo(() => (n: number) => formatCompact(n), []);
 

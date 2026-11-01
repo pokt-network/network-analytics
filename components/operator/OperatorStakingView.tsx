@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { IconServerBolt, IconUsers, IconCoin, IconChartLine, IconReceipt, IconChartBar, IconChartArea } from '@tabler/icons-react';
-import { OWNER_ADDRESS_CAP, type RangeKey } from '@/lib/app-config';
+import { OWNER_ADDRESS_CAP, RANGE_KEYS, type RangeKey } from '@/lib/app-config';
 import { useTabData, prefetch } from '@/lib/use-tab-data';
 import type { OperatorSummary } from '@/lib/data/operator';
 import { formatNumber, formatCompact } from '@/lib/format';
@@ -20,14 +20,12 @@ import { SuppliersTab } from './SuppliersTab';
 
 const STORE_KEY = 'pnf-analytics-operator-addresses';
 
-// The operator tool's per-event resolvers (claim/proof, rewards-by-service) scan across every
-// supplier that pays the addresses — a 60d window times out the indexer at fleet scale — so the tool
-// caps at 30d and skips sibling-range prefetch (each range is a multi-second indexer statement).
-const OPERATOR_RANGES: RangeKey[] = ['24h', '7d', '30d'];
+// Claim/Proof and Rewards by Service read the settlement catalog / tables; with Overserviced, each answered in about 1 s
+// for a 1055-supplier operator at 24h, 7d, 30d and 60d (measured 2026-10-09), so the tool offers every range. Sibling-range
+// prefetch stays off (each range is still one indexer statement per tab).
+const OPERATOR_RANGES: RangeKey[] = [...RANGE_KEYS];
 
-// Rewards by Service is first and the default: Claim/Proof is the slowest cold aggregation (often
-// 10s+ for a large fleet), so opening on it leaves the user watching a load screen the longest. All
-// tabs are prefetched in parallel on mount, so Claim/Proof is usually warm by the time it's clicked.
+// Rewards by Service is first and the default. All tabs are prefetched in parallel on mount.
 const TABS: TabDef[] = [
   { key: 'rewards_by_service', label: 'Rewards by Service', icon: <IconCoin size={15} /> },
   { key: 'claim_proof', label: 'Claim / Proof', icon: <IconChartBar size={15} /> },
@@ -63,7 +61,11 @@ function OperatorBody() {
   const [tab, setTab] = useState('rewards_by_service');
 
   const addrParam = addresses.join(',');
-  const summary = useTabData<OperatorSummary>(addrParam ? `/api/operator/summary?addresses=${addrParam}` : '');
+  const summary = useTabData<OperatorSummary>(addrParam ? `/api/operator/summary?addresses=${addrParam}` : '', {
+    // rewards change at settlements, the fleet counts and stake per block
+    settled: true,
+    alsoByAge: true,
+  });
 
   // Eagerly warm every tab's endpoint in parallel once addresses (and the range) are known. These are
   // heavy indexer aggregations (seconds each on a cold miss); firing them upfront — the same work the
@@ -75,9 +77,10 @@ function OperatorBody() {
     prefetch(`/api/operator/claim-proof?addresses=${addrParam}&range=${range}`);
     prefetch(`/api/operator/rewards-by-service?addresses=${addrParam}&range=${range}`);
     prefetch(`/api/operator/overserviced?addresses=${addrParam}&range=${range}`);
-    // Page-based tabs (range-independent) — warmed once per address set.
-    prefetch(`/api/operator/slashing?addresses=${addrParam}&page=1`);
-    prefetch(`/api/operator/suppliers?addresses=${addrParam}&page=1`);
+    // the first page's url exactly as the tab requests it (useCursorPages), so the tab reuses this fetch
+    prefetch(`/api/operator/slashing?addresses=${addrParam}&range=${range}`);
+    // Page-based tab (range-independent) — warmed once per address set.
+    prefetch(`/api/operator/suppliers?addresses=${addrParam}`);
   }, [addrParam, range]);
 
   return (

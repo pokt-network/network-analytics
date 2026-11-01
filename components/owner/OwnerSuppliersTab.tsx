@@ -2,27 +2,21 @@
 
 import { useState } from 'react';
 import { useStakingTool } from '@/components/staking/StakingToolContext';
-import { useTabData } from '@/lib/use-tab-data';
-import { type SupplierListPage, type StakeFilter, STAKE_FILTERS } from '@/lib/data/suppliers-list';
+import { useCursorPages } from '@/lib/cursor-pages';
+import { type SupplierListPage, type SupplierRow, type StakeFilter, STAKE_FILTERS } from '@/lib/data/suppliers-list';
 import { SuppliersTable } from '@/components/staking/SuppliersTable';
 
 // Owner's fleet of suppliers, with a stake-status filter (All / Staked / Unstaking / Unstaked /
 // Below Min Stake). "Below Min Stake" flags staked nodes at or under the governance minimum.
 export function OwnerSuppliersTab() {
   const { addresses } = useStakingTool();
-  const [page, setPage] = useState(1);
   const [filter, setFilter] = useState<StakeFilter>('all');
 
   const addrParam = addresses.join(',');
-  const resetKey = `${addrParam}|${filter}`;
-  const [prevKey, setPrevKey] = useState(resetKey);
-  if (prevKey !== resetKey) {
-    setPrevKey(resetKey);
-    setPage(1);
-  }
-
-  const d = useTabData<SupplierListPage>(
-    addresses.length ? `/api/owner/suppliers?addresses=${addrParam}&page=${page}&filter=${filter}` : '',
+  const d = useCursorPages<SupplierListPage>(
+    addresses.length ? `/api/owner/suppliers?addresses=${addrParam}&filter=${filter}` : '',
+    `${addrParam}|${filter}`,
+    { rowKey: (r) => (r as SupplierRow).operator },
   );
 
   const filterSelect = (
@@ -43,8 +37,13 @@ export function OwnerSuppliersTab() {
   return (
     <SuppliersTable
       data={d.data}
-      page={page}
-      onPageChange={setPage}
+      page={d.page}
+      canNext={d.canNext}
+      onPrev={d.prev}
+      onNext={d.next}
+      error={d.error}
+      repeats={d.repeats}
+      missed={d.missed}
       right={filterSelect}
       emptyLabel={filter === 'all' ? 'No suppliers found for these owners.' : 'No suppliers match this filter.'}
     />

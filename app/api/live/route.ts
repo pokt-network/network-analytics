@@ -1,9 +1,10 @@
-import { unstable_cache } from 'next/cache';
+import { staleCached } from '@/lib/window-cache';
 import { getStatus } from '@/lib/metadata';
 import { INDEXER_LAG_THRESHOLD } from '@/lib/config';
 import { NETWORK } from '@/lib/app-config';
 import { getCachedPoktPrice, type PoktPrice } from '@/lib/price';
 import { getCachedRolling24hStats } from '@/lib/data/rewards';
+import { getLastSettlement } from '@/lib/data/settlement';
 import { getNetInflationPctYr } from '@/lib/data/economy';
 import { diagJson, restamp, stamped } from '@/lib/diagnostics';
 
@@ -27,13 +28,15 @@ export interface LivePayload {
   relays24h: number | null;
   cu24h: number | null;
   netInflation: number | null;
+  /** The last fully written settlement's height: reward panels refetch when it moves (lib/use-tab-data.ts). */
+  settledHeight: number | null;
 }
 
-/** What the 10s `live` entry stores. The rolling-24h numbers and the price are merged in by the
- *  handler from their own shared entries so every surface reads the exact same value (see GET).
- *  Price is excluded here on purpose: it is CMC-credit-metered, so it lives on a 5-min TTL of its
- *  own rather than refreshing with this 10s heartbeat. */
-type LiveBase = Omit<LivePayload, 'relays24h' | 'cu24h' | 'price'>;
+/** What the 10s `live` entry stores. The rolling-24h numbers, the price and the last-settlement
+ *  height are each merged in by the handler from their own shared entries so every surface reads the
+ *  exact same value (see GET). Price is excluded here on purpose: it is CMC-credit-metered, so it
+ *  lives on a 5-min TTL of its own rather than refreshing with this 10s heartbeat. */
+type LiveBase = Omit<LivePayload, 'relays24h' | 'cu24h' | 'price' | 'settledHeight'>;
 
 async function buildLive(): Promise<LiveBase> {
   const [statusRes, inflationRes] = await Promise.allSettled([
@@ -67,16 +70,18 @@ export async function GET() {
   // of it taken at different times. Kept non-fatal (as the old allSettled branch was): a rolling
   // failure blanks those two items instead of failing the whole heartbeat.
   return diagJson('live', async () => {
-    const [cached, rolling, price] = await Promise.all([
-      unstable_cache(stamped(buildLive), ['live'], { revalidate: LIVE_TTL })(),
+    const [cached, rolling, price, settled] = await Promise.all([
+      staleCached(['live'], LIVE_TTL, stamped(buildLive)),
       getCachedRolling24hStats().catch(() => null),
       getCachedPoktPrice().catch(() => null),
+      getLastSettlement().catch(() => null),
     ]);
     const payload: LivePayload = {
       ...cached.data,
       price,
       relays24h: rolling?.relays24h ?? null,
       cu24h: rolling?.cu24h ?? null,
+      settledHeight: settled?.height ?? null,
     };
     return restamp(cached, payload);
   });

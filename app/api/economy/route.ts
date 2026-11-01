@@ -1,4 +1,4 @@
-import { unstable_cache } from 'next/cache';
+import { staleCached } from '@/lib/window-cache';
 import {
   getSupplyHistory,
   getNetInflationPctYr,
@@ -67,6 +67,6 @@ async function buildEconomy(): Promise<EconomyResponse> {
 export async function GET() {
   // Economy is long-horizon and derived from several resolvers → cache long; warmer keeps it fresh.
   return diagJson('economy', () =>
-    unstable_cache(stamped(() => buildEconomy()), ['economy'], { revalidate: 1800, tags: ['analytics'] })(),
+    staleCached(['economy'], 1800, stamped(() => buildEconomy()), undefined, ['analytics']),
   );
 }

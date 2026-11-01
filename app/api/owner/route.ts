@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { getOwnerRewards, getOwnerSettledClaims, getOwnerTotal, type OwnerRewards } from '@/lib/data/owner';
+import { getLastSettlement } from '@/lib/data/settlement';
 import type { CoverageRange } from '@/lib/data/coverage';
 import { ADDRESS_RE } from '@/lib/staking/addresses';
 import { DEFAULT_RANGE, isRangeKey, OWNER_ADDRESS_CAP, type RangeKey } from '@/lib/app-config';
@@ -33,11 +34,13 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    // one settlement for every part of the response
+    const settlement = await getLastSettlement();
     const [total, rewards, settled] = await Promise.all([
-      getOwnerTotal(addresses, range),
-      getOwnerRewards(addresses, range, groupAll),
+      getOwnerTotal(addresses, range, settlement),
+      getOwnerRewards(addresses, range, groupAll, settlement),
       // the count card only: its failure shows "—" and does not take the rewards down with it
-      getOwnerSettledClaims(addresses, range).catch((e: Error) => {
+      getOwnerSettledClaims(addresses, range, settlement).catch((e: Error) => {
         console.error('[owner] settled claims:', e.message);
         return { count: null, range: null };
       }),

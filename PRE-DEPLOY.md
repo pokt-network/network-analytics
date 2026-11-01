@@ -27,16 +27,16 @@ Records the §9 DECIDE/PROBE items from the build brief and the calls made durin
 5. **Price source (§9.4)** → **CoinMarketCap**, server-side key, 60s cache.
 6. **Gross burn/mint precompute (§4 / §9)** → **NOT built as a cron/precompute pipeline.**
    Derived **live** instead: per PIP-41 each settlement mints `claimed × mint_ratio` and burns the
-   full claimed amount, so daily `Σclaimed` (from `getRewardsByDate`) × the live `mint_ratio` gives
+   full claimed amount, so daily `Σclaimed` (from `getNetworkRewardsJson`, formerly `getRewardsByDate`) × the live `mint_ratio` gives
    the gross bars exactly (verified: mockup's mint/burn ratio == on-chain `mint_ratio` 0.975). Net
-   inflation is the `getTotalSupplyByDay` delta. This avoids scanning the 23.2M-row settlement table
+   inflation is the daily `getSupplyJson` total supply delta (formerly `getTotalSupplyByDay`). This avoids scanning the 23.2M-row settlement table
    and needs no Vercel Cron/Blob for v1. **If per-settlement fidelity is later required** (e.g. the
    `mint_ratio` changes mid-window and exact historical splits matter), add the scheduled rollup then.
 7. **Supply projection methodology (§6 / §9.2)** → v1 ships a **naive flat-rate** extrapolation
    (three demand scenarios, all deflationary), clearly labeled and noted as pending PNF sign-off for
    the mechanistic model + scenario definitions.
 8. **`getRewardsByDomainsAndTimeGroupByServiceV2` broken (§9.3)** → not used. The Services tab derives
-   gross rewards from `getRelaysByServicePerPointJson.claimed_upokt`. **Flag to Otto:** fix/deprecate
+   gross rewards from `getRelaysByServicePerPointJson.claimed_upokt` (since replaced by `getServiceUsageJson`). **Flag to Otto:** fix/deprecate
    the V2 function (PG 42702, ambiguous `domains` column).
 9. **`mint_ratio` = 0.975, `global_inflation_per_claim` = 0.000001** at build time. Net inflation is
    read from supply deltas (authoritative regardless of regime); `mint_ratio` is read live for the
@@ -108,7 +108,7 @@ has a line/area↔bar toggle.
 
 ## Known v1 limitations
 
-- Snapshot-based charts (Network/Suppliers evolution) are **daily** (`getLatestBlocksByDay`), so a
+- Snapshot-based charts (Network/Suppliers evolution) are **daily** (each day's last block: `getBlockStatsJson` `last_height`, formerly `getLatestBlocksByDay`), so a
   24h range shows only 1–2 points. Labeled "as of last daily snapshot."
 - Economy widgets are long-horizon (supply 1yr, burn/mint 7d, projection 2yr) and don't follow the
   range pills.

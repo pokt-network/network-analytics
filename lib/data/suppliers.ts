@@ -1,39 +1,17 @@
 import { gqlFetch } from '@/lib/graphql';
 import { NETWORK } from '@/lib/app-config';
 import { UPOKT_PER_POKT } from '@/lib/config';
-import { DOMAINS_DISTINCT, supplierStatsByDomainsQuery } from '@/lib/queries/analytics';
+import { SUPPLIER_DOMAINS } from '@/lib/queries/analytics';
 import { num } from './_util';
 
-// Suppliers by-domain (aggregate). Distinct domains come from domainServiceDailyRewards grouped by
-// DOMAIN (§9.1 resolution — domains are derived from supplier serviceConfig endpoint hosts). Then
-// getSupplierStatsByDomains([domain]) is called once per domain (as aliases of one request) for accurate
-// distinct counts + stake.
-
-interface DomainGroup {
-  keys: string[] | null;
-  sum: { grossRewards: string | number | null } | null;
-}
-
-/** Distinct supplier domains, ranked by gross reward activity (cap to bound the per-domain calls). */
-export async function getDistinctDomains(cap = 40): Promise<string[]> {
-  const data = await gqlFetch<{ domainServiceDailyRewards: { groupedAggregates: DomainGroup[] } | null }>(
-    NETWORK,
-    DOMAINS_DISTINCT,
-    undefined,
-    { revalidate: 6 * 3600 },
-  );
-  const groups = data.domainServiceDailyRewards?.groupedAggregates ?? [];
-  return groups
-    .map((g) => ({ domain: g.keys?.[0] ?? '', gross: num(g.sum?.grossRewards) }))
-    .filter((g) => g.domain)
-    .sort((a, b) => b.gross - a.gross)
-    .slice(0, cap)
-    .map((g) => g.domain);
-}
+// Suppliers by-domain (aggregate). Domains are derived from supplier serviceConfig endpoint hosts (§9.1 resolution).
+// getSupplierDomainsList ranks them by lifetime claimed rewards and counts, per domain, the Staked suppliers with a
+// live config on it and their stake, in one call.
 
 interface DomainStatRaw {
-  suppliers_count: number | string;
-  total_staked_tokens: number | string;
+  domain: string;
+  stakedSuppliers: number | string;
+  stakedUpokt: number | string;
 }
 
 export interface DomainRow {
@@ -44,23 +22,21 @@ export interface DomainRow {
   sharePct: number; // share of total staked across tracked domains
 }
 
-async function statDomains(domains: string[]): Promise<Array<{ domain: string; suppliers: number; stakedUpokt: number }>> {
-  if (domains.length === 0) return [];
-  const data = await gqlFetch<Record<string, DomainStatRaw | null>>(
+/** Top supplier domains, ranked by lifetime claimed rewards (cap bounds the table). */
+async function statDomains(cap = 40): Promise<Array<{ domain: string; suppliers: number; stakedUpokt: number }>> {
+  const data = await gqlFetch<{ getSupplierDomainsList: DomainStatRaw[] | null }>(
     NETWORK,
-    supplierStatsByDomainsQuery(domains.length),
-    Object.fromEntries(domains.map((d, i) => [`d${i}`, [d]])),
+    SUPPLIER_DOMAINS,
+    { top: cap },
     { revalidate: 6 * 3600 },
   );
-  return domains.map((domain, i) => {
-    const s = data[`d${i}`];
-    return { domain, suppliers: num(s?.suppliers_count), stakedUpokt: num(s?.total_staked_tokens) };
-  });
+  return (data.getSupplierDomainsList ?? [])
+    .filter((d) => d.domain)
+    .map((d) => ({ domain: d.domain, suppliers: num(d.stakedSuppliers), stakedUpokt: num(d.stakedUpokt) }));
 }
 
 export async function getDomainTable(): Promise<DomainRow[]> {
-  const domains = await getDistinctDomains();
-  const stats = await statDomains(domains);
+  const stats = await statDomains();
   const totalStakedUpokt = stats.reduce((s, d) => s + d.stakedUpokt, 0) || 1;
   const rows: DomainRow[] = stats.map((d) => ({
     domain: d.domain,

@@ -1,79 +1,73 @@
 'use client';
 
 import { useState } from 'react';
-import { IconListDetails, IconExternalLink, IconDownload } from '@tabler/icons-react';
-import { EXPLORER_BASE_URL } from '@/lib/app-config';
+import { IconListDetails, IconDownload } from '@tabler/icons-react';
 import { UPOKT_PER_POKT } from '@/lib/config';
 import { useStakingTool } from '@/components/staking/StakingToolContext';
-import { useTabData } from '@/lib/use-tab-data';
+import { useCursorPages, walkPages } from '@/lib/cursor-pages';
 import type { IssuancePage, Issuance } from '@/lib/data/owner';
 import { toCsv, downloadCsv, csvFilename } from '@/lib/csv';
 import { formatNumber, formatPokt, truncate } from '@/lib/format';
 import { Card, CardHeader } from '@/components/ui/Card';
+import { notCovered, rangeNote } from '@/lib/data/coverage';
 
-// CSV export walks the indexer 1000 rows at a time (its page cap), each page after the previous one's
-// cursor (a keyset on block+id, so rows don't shift between pages). A single owner can have ~1M+
-// settlements, so cap the export at the most-recent N — ~5 chunked requests.
+// CSV export walks the indexer 1000 rows at a time (its query limit) with no lookahead row, each page after the previous
+// one's cursor (a keyset on height+event index, so rows don't shift between pages), until a short page or the cap. A
+// single owner can have ~1M+ settlements, so cap the export at the most-recent N — 5 requests, as before.
 const EXPORT_CAP = 5000;
-const EXPORT_CHUNK = 1000;
+const EXPORT_CHUNK = 1000; // the route's largest export page (lookahead=0)
+const EXPORT_MAX_CALLS = Math.ceil(EXPORT_CAP / EXPORT_CHUNK) + 1;
 
-// Settlement-event history across the owner's fleet. Filtered through the supplier relation
-// (supplier.ownerId), so rows are complete — the denormalized supplierOwnerId under-reports. Paged by
-// hasNextPage rather than a total: counting every settlement of a large owner takes ~15s.
+// Settlement-event history across the owner's fleet (the suppliers the owners own now). Paged by
+// hasNextPage rather than a total: counting every settlement of a large owner takes ~15s. Each page after
+// the first reads the rows after the previous page's endCursor (useCursorPages).
 export function RewardIssuancesTab() {
   const { addresses } = useStakingTool();
-  const [page, setPage] = useState(1);
   const [exporting, setExporting] = useState(false);
   const [exportNote, setExportNote] = useState<string | null>(null);
 
   const addrParam = addresses.join(',');
-  const [prevAddr, setPrevAddr] = useState(addrParam);
-  if (prevAddr !== addrParam) {
-    setPrevAddr(addrParam);
-    setPage(1);
-  }
-
-  const issuances = useTabData<IssuancePage>(addresses.length ? `/api/owner/issuances?addresses=${addrParam}&page=${page}` : '');
+  const issuances = useCursorPages<IssuancePage>(addresses.length ? `/api/owner/issuances?addresses=${addrParam}` : '', addrParam);
+  const { page } = issuances;
   const pageRows = issuances.data?.rows.length ?? 0;
-  const hasNext = issuances.data?.hasNextPage ?? false;
   const hasRows = page > 1 || pageRows > 0;
+  // the settlement tables can lag the indexed blocks or have gaps: said, never shown as "no settlements"
+  const range = issuances.data?.range ?? null;
+  const coverageNote = issuances.error ? null : rangeNote(range);
 
   async function exportIssuancesCsv() {
     if (exporting || addresses.length === 0) return;
     setExporting(true);
     setExportNote(null);
     try {
-      const all: Issuance[] = [];
-      let after: string | null = null;
-      let more = true;
-      while (more && all.length < EXPORT_CAP) {
-        const next = after ? `&after=${encodeURIComponent(after)}` : '';
-        const res = await fetch(`/api/owner/issuances?addresses=${addrParam}&pageSize=${EXPORT_CHUNK}${next}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data: IssuancePage = await res.json();
-        all.push(...data.rows);
-        more = data.hasNextPage && !!data.endCursor;
-        after = data.endCursor ?? null;
-      }
+      const { rows: all, complete } = await walkPages<Issuance>(
+        (after, size) => `/api/owner/issuances?addresses=${addrParam}&lookahead=0&pageSize=${size}${after ? `&after=${encodeURIComponent(after)}` : ''}`,
+        EXPORT_CHUNK,
+        EXPORT_CAP,
+        EXPORT_MAX_CALLS,
+      );
       const rows = all.slice(0, EXPORT_CAP);
-      const capped = all.length > EXPORT_CAP || (more && all.length >= EXPORT_CAP);
-      const headers = ['Block', 'Service', 'Operator', 'Owner', 'Relays', 'Settled (POKT)', 'Minted (POKT)', 'Mint Ratio', 'Transaction'];
+      // A walk that stops at the cap on a full page cannot tell whether older settlements exist (no lookahead row, to
+      // stay at 5 requests as before), so it claims neither "all" nor "capped"; a short page ends it as all of them.
+      const readAll = complete;
+      // Owner = the supplier's owner now (Owner As Of says so: 'current'; 'settlement' or 'unknown' where it could not be
+      // read); Owner At Settlement = the owner the settlement recorded (empty for a few old rows)
+      const headers = ['Block', 'Service', 'Operator', 'Owner', 'Owner As Of', 'Owner At Settlement', 'Relays', 'Settled (POKT)', 'Minted (POKT)', 'Mint Ratio'];
       const body = rows.map((r) => [
         r.block,
         r.serviceId,
         r.operator,
         r.owner,
+        r.ownerAsOf,
+        r.settlementOwner,
         r.relays,
         r.settledUpokt / UPOKT_PER_POKT,
         r.mintedUpokt / UPOKT_PER_POKT,
         r.mintRatio,
-        r.transactionId ?? '',
       ]);
       downloadCsv(csvFilename('reward-issuances'), toCsv(headers, body));
       setExportNote(
-        capped
-          ? `Exported the ${formatNumber(rows.length)} most recent settlements — the export is capped for performance.`
-          : `Exported all ${formatNumber(rows.length)} settlements.`,
+        readAll ? `Exported all ${formatNumber(rows.length)} settlements.` : `Exported the ${formatNumber(rows.length)} most recent settlements; older ones may exist.`,
       );
     } catch {
       setExportNote('Export failed — please try again.');
@@ -107,7 +101,7 @@ export function RewardIssuancesTab() {
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
-              {['Block', 'Service', 'Operator', 'Relays', 'Settled', 'Minted', 'Ratio', ''].map((h, i) => {
+              {['Block', 'Service', 'Operator', 'Relays', 'Settled', 'Minted', 'Ratio'].map((h, i) => {
                 const hideOnMobile = i === 2 || i === 3 || i === 4 || i === 6;
                 return (
                   <th
@@ -130,20 +124,16 @@ export function RewardIssuancesTab() {
                 <td className="hidden border-b px-1.5 py-3 text-right tabular-nums sm:table-cell sm:px-3">{formatPokt(r.settledUpokt)}</td>
                 <td className="border-b px-1.5 py-3 text-right tabular-nums sm:px-3">{formatPokt(r.mintedUpokt)}</td>
                 <td className="hidden border-b px-1.5 py-3 text-right tabular-nums sm:table-cell sm:px-3">{r.mintRatio.toFixed(3)}</td>
-                <td className="border-b px-1.5 py-3 text-right sm:px-3">
-                  {r.transactionId ? (
-                    <a href={`${EXPLORER_BASE_URL}/tx/${r.transactionId}`} target="_blank" rel="noopener noreferrer" className="text-text-secondary hover:text-blue-soft" title="Open tx in Explorer">
-                      <IconExternalLink size={15} />
-                    </a>
-                  ) : (
-                    <span className="text-text-tertiary" title="No linked transaction">—</span>
-                  )}
-                </td>
               </tr>
             ))}
+            {issuances.error && (
+              <tr>
+                <td colSpan={7} className="px-3 py-10 text-center text-text-tertiary">{issuances.error}</td>
+              </tr>
+            )}
             {issuances.data && pageRows === 0 && (
               <tr>
-                <td colSpan={8} className="px-3 py-10 text-center text-text-tertiary">No settlements found.</td>
+                <td colSpan={7} className="px-3 py-10 text-center text-text-tertiary">{notCovered(range) ? 'No settlements indexed yet.' : 'No settlements found.'}</td>
               </tr>
             )}
           </tbody>
@@ -152,13 +142,14 @@ export function RewardIssuancesTab() {
       <div className="mt-3.5 flex items-center justify-between gap-3 text-[13px] text-text-secondary">
         <span>page {formatNumber(page)}</span>
         <div className="flex gap-1.5">
-          <button type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Prev</button>
-          <button type="button" disabled={!hasNext} onClick={() => setPage((p) => p + 1)} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>
+          <button type="button" disabled={page <= 1} onClick={issuances.prev} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Prev</button>
+          <button type="button" disabled={!issuances.canNext} onClick={issuances.next} className="rounded-lg border bg-bg-card px-3 py-1.5 disabled:opacity-40 hover:enabled:border-line-hover">Next</button>
         </div>
       </div>
+      {coverageNote && !notCovered(range) && <p className="mt-3 text-[12px] text-text-tertiary">Settlements indexed: {coverageNote}</p>}
       {exportNote && <p className="mt-3 text-[12px] text-text-secondary">{exportNote}</p>}
       <p className="mt-3 text-[12px] italic text-text-tertiary">
-        Each row is a settlement event, not a transaction — the Operator is the node that settled it. The ↗ link opens the underlying tx in the Explorer.
+        Each row is a settlement event, not a transaction (the chain settles claims at the end of a block) — the Operator is the node that settled it.
       </p>
     </Card>
   );

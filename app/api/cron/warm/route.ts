@@ -57,7 +57,7 @@ export async function GET(req: NextRequest) {
       `/api/traffic?range=${range}`,
       `/api/network?range=${range}`,
       `/api/suppliers?range=${range}`,
-      `/api/services/analytics?range=${range}`,
+      `/api/services/usage?range=${range}&size=50`,
       `/api/economy/burnmint?range=${range}`,
     );
   }

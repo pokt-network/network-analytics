@@ -1,21 +1,22 @@
-import { unstable_cache } from 'next/cache';
+import { staleValue } from '@/lib/window-cache';
 import { gqlFetch } from '@/lib/graphql';
 import { toDate } from '@/lib/time';
 import { NETWORK } from '@/lib/app-config';
-import { REWARDS_BY_DATE } from '@/lib/queries/analytics';
+import { NETWORK_USAGE, NETWORK_REWARDS } from '@/lib/queries/analytics';
 import { fixedWindow } from '@/lib/timeranges';
 import { num, parseScalar } from './_util';
+import { unwrapRange } from './coverage';
 
-// Network-wide rewards/relays/CU over time (getRewardsByDate). Backs the Network-wide series and
+// Network-wide rewards/relays/CU over time (getNetworkRewardsJson). Backs the Network-wide series and
 // the Traffic 24h stat deltas. Both claimed and estimated present; caller picks which to show.
 
 interface RewardRaw {
-  date_truncated: string;
+  bucket_start: string;
   relays: number | string;
   estimated_relays: number | string;
-  computed_units: number | string;
-  estimated_computed_units: number | string;
-  claimed_amount: number | string;
+  compute_units: number | string;
+  estimated_compute_units: number | string;
+  claimed_upokt: number | string;
 }
 
 export interface RewardPoint {
@@ -33,21 +34,22 @@ export async function getRewardsByDate(
   interval: 'hour' | 'day' | 'week',
   revalidate = 300,
 ): Promise<RewardPoint[]> {
-  const data = await gqlFetch<{ getRewardsByDate: unknown }>(
+  const data = await gqlFetch<{ getNetworkRewardsJson: unknown }>(
     NETWORK,
-    REWARDS_BY_DATE,
+    NETWORK_REWARDS,
     { start: startISO, end: endISO, interval },
     { revalidate },
   );
-  const raw = parseScalar<RewardRaw[]>(data.getRewardsByDate);
+  // a bucket the indexer does not cover has no row (not a zero), as before
+  const raw = unwrapRange<RewardRaw[]>(parseScalar(data.getNetworkRewardsJson), false).data ?? [];
   return raw
     .map((r) => ({
-      date: toDate(r.date_truncated)?.toISOString() ?? r.date_truncated,
+      date: toDate(r.bucket_start)?.toISOString() ?? r.bucket_start,
       relays: num(r.relays),
       estimatedRelays: num(r.estimated_relays),
-      computedUnits: num(r.computed_units),
-      estimatedComputedUnits: num(r.estimated_computed_units),
-      claimedAmount: num(r.claimed_amount),
+      computedUnits: num(r.compute_units),
+      estimatedComputedUnits: num(r.estimated_compute_units),
+      claimedAmount: num(r.claimed_upokt),
     }))
     .sort((a, b) => a.date.localeCompare(b.date));
 }
@@ -59,11 +61,21 @@ export interface Rolling24h {
   cu24hChange: number;
 }
 
-/** Trailing 24h vs prior 24h, summed from hourly buckets (estimated = demand signal).
- *  Prefer `getCachedRolling24hStats` from route handlers so every surface reads one cache entry. */
+/** Trailing 24h vs prior 24h, summed from hourly buckets of the network total (every service, summed by the indexer;
+ *  estimated = demand signal). Prefer `getCachedRolling24hStats` from route handlers so every surface reads one cache entry. */
 export async function getRolling24hStats(): Promise<Rolling24h> {
   const { startISO, endISO } = fixedWindow(48 * 3600);
-  const pts = await getRewardsByDate(startISO, endISO, 'hour', 60);
+  const data = await gqlFetch<{ getServiceUsageJson: unknown }>(
+    NETWORK,
+    NETWORK_USAGE,
+    { start: startISO, end: endISO, interval: 'hour' },
+    { revalidate: 60 },
+  );
+  const pts = (unwrapRange<Array<{ bucket_start: string; estimated_relays: unknown; estimated_compute_units: unknown }>>(parseScalar(data.getServiceUsageJson), false).data ?? []).map((p) => ({
+    date: toDate(p.bucket_start)?.toISOString() ?? p.bucket_start,
+    estimatedRelays: num(p.estimated_relays),
+    estimatedComputedUnits: num(p.estimated_compute_units),
+  }));
   // Split on the *bucketed* window end, not raw Date.now(). fixedWindow quantizes its edges to
   // WINDOW_BUCKET_MS; using Date.now() here would drift the cut point up to a bucket away from the
   // window it is dividing, so the "current" half could be slightly longer than the prior half.
@@ -101,6 +113,8 @@ export const ROLLING_TTL = 30;
  *  and `60d` would each hold their own copy, warmed at different times, and toggling the range pill
  *  would visibly change values that are supposed to be a fixed rolling window. Route handlers must
  *  call this alongside their own cached payload and merge the result, never from within it. */
-export const getCachedRolling24hStats = unstable_cache(getRolling24hStats, ['rolling24h'], {
-  revalidate: ROLLING_TTL,
-});
+export async function getCachedRolling24hStats(): Promise<Rolling24h> {
+  // served at once while stale and rebuilt after the response, as unstable_cache's own revalidation would hold the end
+  // of the response (lib/window-cache.ts); one built more than two TTLs ago is rebuilt by the request
+  return staleValue(['rolling24h', 'v2'], ROLLING_TTL, getRolling24hStats);
+}

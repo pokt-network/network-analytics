@@ -17,6 +17,7 @@ export function MultiSelect({
   onSelectAll,
   selectAllLabel,
   buttonLabel,
+  onOpen,
 }: {
   options: MultiOption[];
   selected: Set<string>;
@@ -25,6 +26,8 @@ export function MultiSelect({
   onSelectAll?: (ids: string[], select: boolean) => void;
   selectAllLabel?: string;
   buttonLabel?: string;
+  /** Called when the list opens (e.g. to read the options only when they are wanted). */
+  onOpen?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -50,7 +53,10 @@ export function MultiSelect({
     <div ref={ref} className="relative">
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          if (!open) onOpen?.();
+          setOpen(!open);
+        }}
         className="flex items-center gap-2 rounded-lg border bg-bg-surface px-3 py-[7px] text-[13px] font-medium text-text-primary transition-colors hover:border-line-hover"
       >
         <IconAdjustments size={15} />
